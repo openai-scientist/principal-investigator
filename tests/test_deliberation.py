@@ -104,7 +104,7 @@ async def test_consequential_decision_requires_the_critic_first():
         call("decide", **ACCEPT_13),
     ]
     result, lead, _ = await _run(req, pi, [UPHOLD], artifacts)
-    assert result.trace[0].summary.startswith("decide rejected: error: consult the Critic")
+    assert result.trace[0].summary.startswith("decide failed: consult the Critic")
 
 
 async def test_major_critique_must_be_answered_and_a_changed_action_reviewed_again():
@@ -294,3 +294,13 @@ async def test_failure_kind_sees_the_failure_and_needs_no_critic():
     result, lead, _ = await _run(req, pi, [])
     assert result.decision.action == "rerun"
     assert "engine_restarted: The engine restarted." in lead.calls[0][1]["content"]
+
+
+async def test_nested_objects_passed_as_json_strings_are_accepted():
+    import json
+
+    req, artifacts = _hypothesis_request()
+    as_text = ACCEPT_13 | {"decision": json.dumps(ACCEPT_13["decision"])}
+    pi = [call("consult_critic", proposal=json.dumps(ACCEPT_13)), call("decide", **as_text)]
+    result, _, _ = await _run(req, pi, [UPHOLD], artifacts)
+    assert result.decision.selection == {"hypothesis_ids": ["H1", "H3"]}

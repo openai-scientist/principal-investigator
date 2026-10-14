@@ -112,13 +112,11 @@ async def run_agent(
                     observation = f"error: arguments are not valid JSON ({exc})"
                 except ToolError as exc:
                     observation = f"error: {exc}"
-            trace.append(
-                TraceStep(
-                    actor=actor,
-                    tool=call.name,
-                    summary=(tool.summarize(args, observation) if tool else observation)[:300],
-                )
-            )
+            if tool is None or observation.startswith("error"):
+                summary = f"{call.name} failed: {observation.removeprefix('error: ')}"
+            else:
+                summary = tool.summarize(args, observation)
+            trace.append(TraceStep(actor=actor, tool=call.name, summary=summary[:300]))
             if len(observation) > OBSERVATION_LIMIT:
                 observation = observation[:OBSERVATION_LIMIT] + "\n[... observation truncated]"
             messages.append({"role": "tool", "tool_call_id": call.id, "content": observation})

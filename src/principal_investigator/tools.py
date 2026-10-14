@@ -36,6 +36,16 @@ class Session:
     critic: Callable[[dict[str, Any], str], Awaitable[dict[str, Any]]] | None = None
 
 
+def _object(value: Any) -> Any:
+    """Models sometimes pass a nested object as a JSON string; accept both."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
     return {"type": "object", "properties": properties, "required": required or []}
 
@@ -226,7 +236,9 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
         return "noted"
 
     async def consult_critic(args: dict) -> str:
-        proposal = args.get("proposal")
+        proposal = _object(args.get("proposal"))
+        if isinstance(proposal, dict):
+            proposal["decision"] = _object(proposal.get("decision"))
         if not isinstance(proposal, dict) or not isinstance(proposal.get("decision"), dict):
             raise ToolError("proposal must be an object with a `decision` and your `rationale`")
         if len(s.critiques) >= MAX_CRITIC_CALLS:
@@ -237,6 +249,7 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
         return json.dumps(verdict, ensure_ascii=False, indent=1)
 
     async def decide(args: dict) -> str:
+        args["decision"] = _object(args.get("decision"))
         if s.req.kind in NEEDS_CRITIC:
             if not s.critiques:
                 raise ToolError("consult the Critic with your draft decision before deciding")
@@ -296,11 +309,7 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
             "decide again.",
             DECIDE_PARAMETERS,
             decide,
-            lambda a, o: (
-                f"decided {(a.get('decision') or {}).get('action')}"
-                if o == "decision recorded"
-                else f"decide rejected: {o[:200]}"
-            ),
+            lambda a, o: f"decided {(a.get('decision') or {}).get('action')}",
         ),
     ]
 
