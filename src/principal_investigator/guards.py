@@ -125,6 +125,19 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
             unknown = [c for c in chosen if known and c not in known]
             if unknown:
                 raise GuardError(f"unknown ids {unknown}; choose from {sorted(known)}")
+            blocked = await ws.blocked(req.situation.stage_key)
+            if blocked is not None:
+                whole, ids = blocked
+                if whole:
+                    raise GuardError(
+                        "the latest review has a blocking finding on the whole artifact; "
+                        "send it back or stop instead of accepting"
+                    )
+                if refused := [c for c in chosen if c in ids]:
+                    raise GuardError(
+                        f"{refused} still have blocking review findings; select only ids "
+                        "without one, or send the stage back"
+                    )
             data["selection"] = {allowed.selection_key: chosen}
     elif action == "send_back":
         target = decision_raw.get("target_stage_key")
@@ -156,12 +169,12 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
         except ValidationError:
             raise GuardError("escalate needs a valid reason_code and a message") from None
 
-    if action == "approve" and await ws.latest_review_passed(req.situation.stage_key) is False:
+    if action == "approve" and not await _approvable(req, ws):
         escalate = Escalation(
             reason_code="integrity",
             message=(
-                "The latest independent review still has a blocking finding, so the PI may not "
-                "approve; please decide."
+                "The latest independent review has a blocking finding on the whole artifact or "
+                "on every hypothesis, so the PI may not approve; please decide."
             ),
         )
 
@@ -187,3 +200,24 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
         brief=str(raw.get("brief") or "").strip()[:1500],
         raw=raw,
     )
+
+
+async def _approvable(req: ConsultationRequest, ws: Workspace) -> bool:
+    """Approval publishes the artifact; blocked hypotheses are then refused at selection.
+
+    Allowed when the review passed, or when every blocking finding is on a hypothesis and at
+    least one hypothesis has none.
+    """
+    blocked = await ws.blocked(req.situation.stage_key)
+    if blocked is None:
+        return True
+    whole, ids = blocked
+    if whole:
+        return False
+    if not ids:
+        return True
+    known: set[str] = set()
+    for ref in req.artifacts:
+        if ref.role == "primary" and ref.stage_key == req.situation.stage_key:
+            known.update(await ws.ids_of(ref.artifact_id))
+    return bool(known - ids)

@@ -103,6 +103,30 @@ class Workspace:
         return []
 
     async def latest_review_passed(self, stage_key: str | None) -> bool | None:
+        doc = await self._latest_review(stage_key)
+        return doc.get("passed") if isinstance(doc, dict) else None
+
+    async def blocked(self, stage_key: str | None) -> tuple[bool, set[str]] | None:
+        """Blocking findings of the latest review: (whole artifact blocked, blocked ids).
+
+        A blocking finding anchored to ``hypothesis:<id>`` blocks that id only; any other
+        blocking finding blocks the whole artifact. ``None`` when there is no review.
+        """
+        doc = await self._latest_review(stage_key)
+        if not isinstance(doc, dict):
+            return None
+        whole, ids = False, set()
+        for finding in doc.get("findings") or []:
+            if not isinstance(finding, dict) or finding.get("severity") != "blocking":
+                continue
+            locator = str((finding.get("anchor") or {}).get("locator") or "")
+            if locator.startswith("hypothesis:"):
+                ids.add(locator.removeprefix("hypothesis:").split("/", 1)[0])
+            else:
+                whole = True
+        return whole, ids
+
+    async def _latest_review(self, stage_key: str | None):
         reviews = [
             r
             for r in self.refs.values()
@@ -113,8 +137,7 @@ class Workspace:
         if not reviews:
             return None
         latest = max(reviews, key=lambda r: r.version)
-        doc = await self.json(latest.artifact_id)
-        return doc.get("passed") if isinstance(doc, dict) else None
+        return await self.json(latest.artifact_id)
 
 
 def _page(body: str, offset: int) -> str:

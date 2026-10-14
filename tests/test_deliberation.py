@@ -238,6 +238,42 @@ async def test_approve_while_review_blocks_becomes_an_integrity_escalation():
     assert result.escalate.reason_code == "integrity"
 
 
+ON_H1 = FINDINGS_BLOCKED | {
+    "findings": [
+        FINDINGS_BLOCKED["findings"][0] | {"anchor": {"locator": "hypothesis:H1/statement"}}
+    ]
+}
+
+
+async def test_approve_is_allowed_when_blocking_findings_are_on_some_hypotheses_only():
+    req, artifacts = _review_request(ON_H1)
+    approve = decision("approve")
+    pi = [call("consult_critic", proposal=approve), call("decide", **approve)]
+    result, _, _ = await _run(req, pi, [UPHOLD], artifacts)
+    assert result.decision.action == "approve" and result.escalate is None
+
+
+async def test_accept_refuses_hypotheses_with_blocking_findings():
+    content, review = blob(HYPOTHESES), blob(ON_H1)
+    req = request(
+        artifacts=[
+            ref("a1", content, schema="i2h.hypotheses/v1", role="primary"),
+            ref("r1", review, schema="review.findings/v1", role="review"),
+        ]
+    )
+    with_h1 = ACCEPT_13
+    without = decision("accept", selection={"hypothesis_ids": ["H3"]})
+    pi = [
+        call("consult_critic", proposal=with_h1),
+        call("decide", **with_h1),
+        call("consult_critic", proposal=without),
+        call("decide", **without),
+    ]
+    result, lead, _ = await _run(req, pi, [UPHOLD, UPHOLD], {"a1": content, "r1": review})
+    assert result.decision.selection == {"hypothesis_ids": ["H3"]}
+    assert "['H1'] still have blocking review findings" in lead.observations()[1]
+
+
 async def test_approve_after_passed_review_has_no_escalation_and_no_handoff():
     req, artifacts = _review_request(FINDINGS_PASSED)
     approve = decision("approve")
