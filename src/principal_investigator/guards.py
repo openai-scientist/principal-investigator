@@ -18,7 +18,7 @@ from principal_investigator.workspace import Workspace
 
 MAX_FINDINGS = 6
 MAX_HANDOFF = 8
-MAX_LINE = 600
+MAX_LINE = 480
 MAX_NOTES = 4
 
 
