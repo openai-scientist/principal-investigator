@@ -139,10 +139,41 @@ async def test_guard_rejections_come_back_as_observations_the_agent_fixes():
     req, artifacts = _hypothesis_request()
     bad = decision("accept", selection={"hypothesis_ids": ["H9"]})
     good = decision("accept", selection={"hypothesis_ids": ["H1"]})
-    pi = [call("consult_critic", proposal=bad), call("decide", **bad), call("decide", **good)]
-    result, lead, _ = await _run(req, pi, [UPHOLD], artifacts)
+    pi = [
+        call("consult_critic", proposal=bad),
+        call("decide", **bad),
+        call("consult_critic", proposal=good),
+        call("decide", **good),
+    ]
+    result, lead, _ = await _run(req, pi, [UPHOLD, UPHOLD], artifacts)
     assert result.decision.selection["hypothesis_ids"] == ["H1"]
     assert "unknown ids ['H9']" in lead.observations()[1]
+
+
+async def test_changing_the_selection_after_the_critic_needs_a_new_review():
+    req, artifacts = _hypothesis_request()
+    reviewed = decision("accept", selection={"hypothesis_ids": ["H1"]})
+    swapped = decision("accept", selection={"hypothesis_ids": ["H3"]})
+    pi = [
+        call("consult_critic", proposal=reviewed),
+        call("decide", **swapped),
+        call("decide", **reviewed),
+    ]
+    result, lead, _ = await _run(req, pi, [UPHOLD], artifacts)
+    assert result.decision.selection["hypothesis_ids"] == ["H1"]
+    assert "differs from the draft the Critic reviewed (selection)" in lead.observations()[1]
+
+
+async def test_a_malformed_decision_is_an_observation_not_a_crash():
+    req, artifacts = _hypothesis_request()
+    pi = [
+        call("consult_critic", proposal=ACCEPT_13),
+        call("decide", decision="not json at all"),
+        call("decide", **ACCEPT_13),
+    ]
+    result, lead, _ = await _run(req, pi, [UPHOLD], artifacts)
+    assert result.status == "decided"
+    assert "`decision` must be an object" in lead.observations()[1]
 
 
 async def test_text_without_a_tool_call_is_nudged_back_to_tools():

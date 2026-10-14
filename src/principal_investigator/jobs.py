@@ -113,17 +113,18 @@ class Jobs:
         return False
 
     def fail_interrupted(self) -> None:
-        """At startup, consultations a previous process left running end as failed."""
+        """At startup, consultations a previous process left running end as failed, and the
+        Platform is told so in the background (otherwise it would wait for them forever)."""
         for consultation_id in self.store.all_ids():
             record = self.store.read(consultation_id)
-            if record and record.get("status") == "running":
-                self.store.finish(
-                    consultation_id,
-                    ConsultationResult(
-                        consultation_id=consultation_id,
-                        status="failed",
-                        failure=FailureInfo(
-                            code="pi_restarted", message="The PI service restarted."
-                        ),
-                    ),
-                )
+            if not record or record.get("status") != "running":
+                continue
+            result = ConsultationResult(
+                consultation_id=consultation_id,
+                status="failed",
+                failure=FailureInfo(code="pi_restarted", message="The PI service restarted."),
+            )
+            self.store.finish(consultation_id, result)
+            url = (record.get("request") or {}).get("callback_url")
+            if url:
+                self.tasks[consultation_id] = asyncio.create_task(self.deliver(url, result))

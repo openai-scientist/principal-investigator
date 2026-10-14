@@ -91,10 +91,22 @@ async def test_agent_failure_is_reported_with_its_trace(tmp_path):
 
 async def test_restart_marks_running_consultations_failed(tmp_path):
     store = tmp_store(tmp_path)
-    store.create("c-9", {"x": 1})
-    jobs = Jobs(Settings(service_key=KEY, store_dir=tmp_path / "store"), store)
+    store.create("c-9", {"callback_url": "http://platform.test/cb/c-9"})
+    delivered = []
+
+    def handler(request):
+        delivered.append(json.loads(request.content))
+        return httpx.Response(200)
+
+    jobs = Jobs(
+        Settings(service_key=KEY, store_dir=tmp_path / "store"),
+        store,
+        transport=httpx.MockTransport(handler),
+    )
     jobs.fail_interrupted()
     assert store.read("c-9")["result"]["failure"]["code"] == "pi_restarted"
+    await _drain(jobs)
+    assert delivered[0]["failure"]["code"] == "pi_restarted"
 
 
 async def test_health_is_public(tmp_path):

@@ -108,10 +108,12 @@ async def run_agent(
                     parsed = json.loads(call.arguments or "{}")
                     args = parsed if isinstance(parsed, dict) else {}
                     observation = await tool.run(args)
-                except ValueError as exc:
+                except json.JSONDecodeError as exc:
                     observation = f"error: arguments are not valid JSON ({exc})"
                 except ToolError as exc:
                     observation = f"error: {exc}"
+                except Exception as exc:  # a bad argument must not end the consultation
+                    observation = f"error: {call.name} failed ({type(exc).__name__}: {exc})"
             if tool is None or observation.startswith("error"):
                 summary = f"{call.name} failed: {observation.removeprefix('error: ')}"
             else:

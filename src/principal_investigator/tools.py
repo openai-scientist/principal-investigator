@@ -17,6 +17,8 @@ OPENALEX = "https://api.openalex.org/works"
 HF_DATASETS = "https://huggingface.co/api/datasets"
 #: Kinds whose decision has consequences: the PI must hear the Critic before deciding.
 NEEDS_CRITIC = {"charter", "gate_review", "stage_outcome"}
+#: Decision fields the Critic must have seen exactly; notes and findings may be refined after.
+SUBSTANCE = ("action", "option_id", "selection", "target_stage_key")
 MAX_CRITIC_CALLS = 3
 NOTE_KINDS = ["lesson", "risk", "observation", "question"]
 
@@ -60,6 +62,9 @@ def read_tools(s: Session) -> list[Tool]:
     async def read_artifact(args: dict) -> str:
         artifact_id = str(args.get("artifact_id") or "")
         offset = args.get("offset") or 0
+        section = args.get("section")
+        if section is not None and not isinstance(section, str):
+            raise ToolError("`section` must be a string such as H2, a heading, or a JSON key")
         try:
             return await s.ws.read(
                 artifact_id, args.get("section"), int(offset) if str(offset).isdigit() else 0
@@ -249,17 +254,19 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
         return json.dumps(verdict, ensure_ascii=False, indent=1)
 
     async def decide(args: dict) -> str:
-        args["decision"] = _object(args.get("decision"))
+        decision = args["decision"] = _object(args.get("decision"))
+        if not isinstance(decision, dict):
+            raise ToolError("`decision` must be an object with an `action`")
         if s.req.kind in NEEDS_CRITIC:
             if not s.critiques:
                 raise ToolError("consult the Critic with your draft decision before deciding")
             last = s.critiques[-1]
-            if last["proposal"]["decision"].get("action") != (args.get("decision") or {}).get(
-                "action"
-            ):
+            reviewed = last["proposal"]["decision"]
+            changed = [k for k in SUBSTANCE if reviewed.get(k) != decision.get(k)]
+            if changed:
                 raise ToolError(
-                    "your decision's action differs from the draft the Critic reviewed; "
-                    "consult the Critic on this decision first"
+                    "your decision differs from the draft the Critic reviewed "
+                    f"({', '.join(changed)}); consult the Critic on this decision first"
                 )
             majors = [p for p in last["verdict"].get("points", []) if p.get("severity") == "major"]
             if majors and not args.get("critique_response"):
