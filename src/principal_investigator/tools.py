@@ -236,7 +236,7 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
         return "noted"
 
     async def consult_critic(args: dict) -> str:
-        proposal = _object(args.get("proposal"))
+        proposal = args["proposal"] = _object(args.get("proposal"))
         if isinstance(proposal, dict):
             proposal["decision"] = _object(proposal.get("decision"))
         if not isinstance(proposal, dict) or not isinstance(proposal.get("decision"), dict):
