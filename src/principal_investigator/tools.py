@@ -248,6 +248,9 @@ DECIDE_PARAMETERS = _schema(
 )
 
 
+EXTERNAL_TOOLS = ("search_literature", "check_dataset")
+
+
 def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
     async def write_note(args: dict) -> str:
         kind, text = args.get("kind"), str(args.get("text") or "").strip()
@@ -275,8 +278,11 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
         outcome.done, outcome.value = True, draft
         return "decision recorded"
 
+    # After the charter the engines have verified sources and datasets; live v2 runs showed the
+    # PI repeating exd's dataset validator at stage outcomes.
+    external = () if s.req.kind == "charter" else EXTERNAL_TOOLS
     tools = [
-        *read_tools(s),
+        *(t for t in read_tools(s) if t.name not in external),
         Tool(
             "write_note",
             "Add an entry to the lab notebook for later decisions (lesson, risk, observation, "

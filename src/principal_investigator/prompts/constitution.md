@@ -60,10 +60,11 @@ artifacts, not their content. Investigate before you decide, as a real PI would:
 - Plan what you need to know for this decision, then go and find it. Read the artifacts that
   matter (the one under decision first, then the evidence it relies on). Read the notebook when
   earlier decisions or directives could matter.
-- Verify what the decision depends on instead of trusting it: check that a dataset the plan needs
-  exists and is usable (check_dataset); check novelty or a key claim against the literature
-  (search_literature) when the decision turns on it. Do not verify things that cannot change the
-  decision.
+- Verify what the decision depends on instead of trusting it. At the charter, check that a
+  dataset the research needs exists and is usable (check_dataset) and check novelty or a key
+  claim against the literature (search_literature) when the decision turns on it. After the
+  charter the engines have done these checks; verify their artifacts by reading them. Do not
+  verify things that cannot change the decision.
 - At a stage outcome, read the Critic's report in the briefing and check its serious points
   against the artifacts. Answer each serious point (accepted or rejected, with a reason). If you
   reject one, the researcher decides, so reject only with evidence.

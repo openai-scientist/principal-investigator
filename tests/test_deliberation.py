@@ -84,8 +84,6 @@ async def test_pi_investigates_verifies_and_decides_without_a_critic_tool():
         call("list_artifacts"),
         call("read_artifact", artifact_id="a1"),
         call("read_artifact", artifact_id="a1", section="H2"),
-        call("check_dataset", query="natural questions"),
-        call("search_literature", query="misleading retrieval small models"),
         call("write_note", kind="risk", text="H2 needs a reranker baseline."),
         call("consult_critic", proposal=ACCEPT_13),
         call("decide", **ACCEPT_13),
@@ -99,13 +97,35 @@ async def test_pi_investigates_verifies_and_decides_without_a_critic_tool():
     assert set(result.usage) == {"lead"}
     seen = lead.observations()
     assert "3 hypotheses" in seen[1] and '"risk": "high"' in seen[2]
-    assert "natural_questions" in seen[3] and "license=cc-by-sa-3.0" in seen[3]
-    assert "ACL" in seen[4]
-    assert seen[6] == "error: unknown tool 'consult_critic'"
+    assert seen[4] == "error: unknown tool 'consult_critic'"
     assert "Retrieval of misleading" not in lead.calls[0][1]["content"]  # not pre-stuffed
     assert [(t.actor, t.tool) for t in result.trace if t.actor != "pi"] == []
     assert result.trace[2].summary == "read a1 section 'H2'"
     assert any(n.kind == "risk" and "reranker" in n.text for n in result.notebook)
+
+
+async def test_only_the_charter_verifies_against_the_literature_and_the_hub():
+    web = FakeWeb()
+    external = [
+        call("check_dataset", query="natural questions"),
+        call("search_literature", query="misleading retrieval small models"),
+    ]
+    req, artifacts = _hypothesis_request()
+    _, lead = await _run(req, [*external, call("decide", **ACCEPT_13)], artifacts, web)
+    assert lead.observations()[:2] == [
+        "error: unknown tool 'check_dataset'",
+        "error: unknown tool 'search_literature'",
+    ]
+    assert web.queries == []
+
+    req = request(kind="charter", charter=None, allowed=[{"action": "charter"}])
+    charter = decision(
+        "charter", charter={"question": "Q?", "objectives": ["O"], "success_criteria": ["S"]}
+    )
+    _, lead = await _run(req, [*external, call("decide", **charter)], web=web)
+    seen = lead.observations()
+    assert "natural_questions" in seen[0] and "license=cc-by-sa-3.0" in seen[0]
+    assert "ACL" in seen[1]
 
 
 async def test_guard_rejections_come_back_as_observations_the_agent_fixes():
