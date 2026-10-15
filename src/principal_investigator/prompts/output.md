@@ -13,8 +13,12 @@ Arguments of the `decide` tool:
   "escalate": null,
   "handoff": ["<instruction for the team of the next stage; empty unless the format asks for it>"],
   "brief": "<2-4 sentences for the researcher>",
-  "critique_response": [{"point": "<Critic point>", "response": "accepted|rejected", "reason": "<why>"}]
+  "critic_response": [{"point_id": "<id of a serious Critic point, e.g. C1>", "response": "accepted|rejected", "reason": "<why>"}],
+  "directives_applied": [{"entry_id": "<id of a researcher directive>", "how": "<how this decision follows it>"}]
 }
+
+`critic_response` is required at a stage outcome for every serious Critic point; `directives_applied`
+for every researcher directive in the context (charter and stage outcome).
 
 `escalate`, when set, is {"reason_code": "integrity|charter_conflict|low_confidence|out_of_scope|cannot_decide", "message": "<one sentence>"}.
 Consider at least one real alternative in `options_considered`.

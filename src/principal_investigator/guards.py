@@ -9,17 +9,28 @@ from pydantic import ValidationError
 from principal_investigator.contract import (
     ConsideredOption,
     ConsultationRequest,
+    CriticPoint,
+    CriticReport,
+    CriticResponse,
+    DirectiveApplied,
     Escalation,
     EvidencePoint,
-    Finding,
     NoteDraft,
+    ObligationCheck,
     PIDecision,
 )
-from principal_investigator.workspace import Workspace
+from principal_investigator.workspace import ArtifactError, Workspace
 
-MAX_FINDINGS = 12
-#: B17: the PI arbitrates the review; its own findings are only what the reviewer cannot see.
-MAX_OWN_FINDINGS = 2
+MAX_POINTS = 8
+CHARTER_LISTS = (
+    "objectives",
+    "scope_in",
+    "scope_out",
+    "success_criteria",
+    "kill_criteria",
+    "constraints",
+)
+INTEGRITY_TAGS = ("post_hoc_criteria", "spin", "suppressed_result", "fabrication", "leakage")
 #: The Platform passes at most five hand-off lines to the next stage.
 MAX_HANDOFF = 5
 MAX_LINE = 480
@@ -44,6 +55,8 @@ class Draft:
     escalate: Escalation | None = None
     handoff: list[str] = field(default_factory=list)
     notebook: list[NoteDraft] = field(default_factory=list)
+    critic_response: list[CriticResponse] = field(default_factory=list)
+    directives_applied: list[DirectiveApplied] = field(default_factory=list)
     brief: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -64,36 +77,6 @@ def _models(value: Any, model, limit: int) -> list:
     return out[:limit]
 
 
-def _findings(raw: list, req: ConsultationRequest) -> list[Finding]:
-    under_review = list(req.gate.artifact_ids) if req.gate else []
-    known_artifacts = {a.artifact_id for a in req.artifacts} | set(under_review)
-    findings = []
-    for i, item in enumerate(raw[:MAX_FINDINGS], 1):
-        if not isinstance(item, dict):
-            raise GuardError("each finding must be an object")
-        anchor = item.get("anchor") if isinstance(item.get("anchor"), dict) else {}
-        artifact_id = item.get("artifact_id") or anchor.get("artifact_id")
-        if artifact_id not in known_artifacts:
-            artifact_id = under_review[0] if under_review else None
-        locator = item.get("locator") or anchor.get("locator") or ""
-        try:
-            findings.append(
-                Finding(
-                    finding_id=f"PI-{req.consultation_id[:8]}-{i}",
-                    anchor={"artifact_id": artifact_id, "locator": locator},
-                    severity=item.get("severity", "major"),
-                    kind=item.get("kind", "fix"),
-                    category=item.get("category", "other"),
-                    issue=item.get("issue") or "",
-                    suggestion=item.get("suggestion"),
-                    author="researcher",
-                )
-            )
-        except ValidationError as exc:
-            raise GuardError(f"finding {i} is invalid: {exc.errors()[0]['msg']}") from None
-    return findings
-
-
 async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) -> Draft:
     decision_raw = raw.get("decision")
     if not isinstance(decision_raw, dict):
@@ -105,24 +88,7 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
         raise GuardError(f"action {action!r} is not allowed; choose one of: {names}")
 
     data: dict[str, Any] = {"action": action, "note": decision_raw.get("note")}
-    if action == "answer":
-        option = decision_raw.get("option_id")
-        if option not in allowed.option_ids:
-            raise GuardError(f"option_id must be one of {allowed.option_ids}")
-        data["option_id"] = option
-        params = decision_raw.get("params") or {}
-        if not isinstance(params, dict) or not all(
-            isinstance(k, str)
-            and isinstance(v, list)
-            and len(v) <= 100
-            and all(isinstance(i, str) and i for i in v)
-            for k, v in params.items()
-        ):
-            raise GuardError("params must map a name to a list of ids, e.g. {'dropped': ['P3']}")
-        data["params"] = params
-    elif action == "comment":
-        data["findings"] = await _comment(decision_raw, req, ws)
-    elif action == "accept":
+    if action == "accept":
         selection = decision_raw.get("selection") or {}
         if allowed.selection_key:
             if not isinstance(selection, dict):
@@ -183,15 +149,6 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
         except ValidationError:
             raise GuardError("escalate needs a valid reason_code and a message") from None
 
-    if action == "approve" and not await _approvable(req, ws):
-        escalate = Escalation(
-            reason_code="integrity",
-            message=(
-                "The latest independent review has a blocking finding on the whole artifact or "
-                "on every hypothesis, so the PI may not approve; please decide."
-            ),
-        )
-
     rationale = str(raw.get("rationale") or "").strip()
     if not rationale:
         raise GuardError(
@@ -203,93 +160,206 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
         if action in ("accept", "send_back", "charter")
         else []
     )
+    options = _models(raw.get("options_considered"), ConsideredOption, 6)
+    critic_response = _models(raw.get("critic_response"), CriticResponse, 20)
+    directives_applied = _models(raw.get("directives_applied"), DirectiveApplied, 20)
+
+    _check_critic_response(req, critic_response)
+    if escalate is None:
+        _check_directives(req, directives_applied)
+    await _check_subset(req, ws, action, options)
+    if req.kind == "close":
+        _check_close(req, data["note"] or "")
+
     return Draft(
         decision=decision,
         rationale=rationale,
         confidence=confidence,
-        options_considered=_models(raw.get("options_considered"), ConsideredOption, 6),
+        options_considered=options,
         evidence=_models(raw.get("evidence"), EvidencePoint, 20),
         assumptions=_strings(raw.get("assumptions"), 8),
         would_change_my_mind=_strings(raw.get("would_change_my_mind"), 8),
         escalate=escalate,
         handoff=handoff,
         notebook=_models(raw.get("notebook"), NoteDraft, MAX_NOTES),
+        critic_response=critic_response,
+        directives_applied=directives_applied,
         brief=str(raw.get("brief") or "").strip()[:1500],
         raw=raw,
     )
 
 
-async def _comment(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) -> list[Finding]:
-    """B17: adopt the reviewer's findings by id; own findings only for what serves the charter."""
-    adopt, own = raw.get("adopt") or [], raw.get("findings") or []
-    if not isinstance(adopt, list) or not isinstance(own, list):
-        raise GuardError("`adopt` must be a list of reviewer finding ids, `findings` a list")
-    if not adopt and not own:
-        raise GuardError("comment needs reviewer finding ids in `adopt`, or a finding of your own")
-    if len(adopt) + len(own) > MAX_FINDINGS:
-        raise GuardError(f"at most {MAX_FINDINGS} findings; adopt the ones that matter most")
-    if len(own) > MAX_OWN_FINDINGS:
+def _token(value: str):
+    return re.compile(rf"(?<![\w-]){re.escape(value)}(?![\w-])")
+
+
+def _check_critic_response(req: ConsultationRequest, given: list[CriticResponse]) -> None:
+    """G-critic: the PI answers every serious point of the Critic's report."""
+    if req.kind != "stage_outcome" or req.critique is None:
+        return
+    answered = {r.point_id for r in given if r.reason.strip()}
+    if missing := [
+        p.point_id
+        for p in req.critique.points
+        if p.severity == "serious" and p.point_id not in answered
+    ]:
         raise GuardError(
-            f"at most {MAX_OWN_FINDINGS} findings of your own; adopt the reviewer's by id"
+            f"the Critic raised serious points {missing}; answer each in `critic_response`, an "
+            "argument of decide next to `decision`: {point_id, response: accepted|rejected, "
+            "reason}. If you reject one, the researcher decides"
         )
-    for item in own:
-        if not isinstance(item, dict) or "charter:" not in str(item.get("issue") or ""):
-            raise GuardError(
-                "a finding of your own must cite the charter line it serves "
-                "(charter:<field>[i]) in `issue`; reviewer issues go in `adopt` by id"
-            )
-    reviewer = {f["finding_id"]: f for f in await ws.review_findings(req.situation.stage_key)}
-    adopt = list(dict.fromkeys(str(i) for i in adopt))
-    if adopt and not any(f.get("severity") == "blocking" for f in reviewer.values()):
-        # Live run: after a passed review the PI asked for sample sizes and leakage screens,
-        # which is the next stage's design work. Approve and carry them in the hand-off.
-        raise GuardError(
-            "the review has no blocking finding: approve, and carry the major and minor "
-            "findings to the next stage in your stage-outcome handoff; comment now only with "
-            "a finding of your own that cites the charter"
-        )
-    if unknown := [i for i in adopt if i not in reviewer]:
-        raise GuardError(f"unknown reviewer finding ids {unknown}; choose from {sorted(reviewer)}")
-    taken = {str((reviewer[i].get("anchor") or {}).get("locator") or "") for i in adopt}
-    if repeated := [o.get("locator") for o in own if o.get("locator") in taken]:
-        raise GuardError(
-            f"your own findings at {repeated} sit where an adopted reviewer finding already is; "
-            "the adopted finding carries the request, so drop yours or anchor it to what only "
-            "the charter shows"
-        )
-    copied = [
-        reviewer[i]
-        | {
-            "issue": f"[{i}] {reviewer[i].get('issue') or ''}",
-            "category": reviewer[i].get("category") or "other",
-        }
-        for i in adopt
+
+
+def _directives(req: ConsultationRequest) -> list[str]:
+    return [
+        e.entry_id
+        for e in req.notebook
+        if e.kind == "directive" and e.actor == "user" and e.entry_id
     ]
-    return _findings(copied + own, req)
+
+
+def _check_directives(req: ConsultationRequest, given: list[DirectiveApplied]) -> None:
+    """G-directive: every researcher directive is cited with how the decision follows it."""
+    if req.kind not in ("charter", "stage_outcome"):
+        return
+    cited = {d.entry_id for d in given if d.how.strip()}
+    if missing := [i for i in _directives(req) if i not in cited]:
+        raise GuardError(
+            f"researcher directives {missing} are not in `directives_applied`; add "
+            "{entry_id, how} for each (how this decision follows it), or set `escalate` if "
+            "following it would break integrity"
+        )
+
+
+async def _check_subset(
+    req: ConsultationRequest, ws: Workspace, action: str, options: list[ConsideredOption]
+) -> None:
+    """G-subset: when part of the stage is sound, rejecting all of it must be argued."""
+    accept = req.allowed_for("accept")
+    if req.kind != "stage_outcome" or action == "accept" or not (accept and accept.selection_key):
+        return
+    try:
+        free = await selectable(ws, req.situation.stage_key)
+    except ArtifactError:
+        return  # nothing can be verified; the agent already saw the read error
+    if not free:
+        return
+    if not any(o.action == "accept" and (o.why_not or "").strip() for o in options):
+        raise GuardError(
+            "some items are not blocked by the review: `options_considered` must include an "
+            "`accept` option (a subset) with `why_not` before you choose another action"
+        )
+
+
+def _check_close(req: ConsultationRequest, note: str) -> None:
+    """G-close: the report names every obligation that is not controlled."""
+    if missing := [
+        o.obligation_id
+        for o in req.obligations
+        if o.status != "controlled" and not _token(o.obligation_id).search(note)
+    ]:
+        raise GuardError(
+            f"the report must name every open or unresolved obligation by id; missing {missing}. "
+            "Add a Limitations section that lists each with what it means for the conclusions"
+        )
+
+
+async def selectable(ws: Workspace, stage_key: str | None) -> list[str]:
+    """Current items of the stage that the latest review does not block."""
+    known = await ws.current_ids(stage_key)
+    blocked = await ws.blocked(stage_key)
+    if blocked is None:
+        return known
+    whole, ids = blocked
+    return [] if whole else [i for i in known if i not in ids]
 
 
 def _named(hypothesis: str, finding_ids: set[str], lines: list[str]) -> bool:
     """B19: a handoff line names the hypothesis and one of its blocking findings."""
 
-    def token(value: str):
-        return re.compile(rf"(?<![\w-]){re.escape(value)}(?![\w-])")
-
-    names, findings = token(hypothesis), [token(f) for f in finding_ids]
+    names, findings = _token(hypothesis), [_token(f) for f in finding_ids]
     return any(names.search(line) and any(f.search(line) for f in findings) for line in lines)
 
 
-async def _approvable(req: ConsultationRequest, ws: Workspace) -> bool:
-    """Approval publishes the artifact; blocked hypotheses are then refused at selection.
+# -- the Critic's report -------------------------------------------------------------------
 
-    Allowed when the review passed, or when every blocking finding is on a hypothesis and at
-    least one hypothesis has none.
-    """
-    blocked = await ws.blocked(req.situation.stage_key)
-    if blocked is None:
-        return True
-    whole, ids = blocked
-    if whole:
-        return False
-    if not ids:
-        return True
-    return bool(set(await ws.current_ids(req.situation.stage_key)) - ids)
+_CHARTER_REF = re.compile(r"charter:(\w+)\[(\d+)\]")
+
+
+def _check_ref(lens: str, ref: str, req: ConsultationRequest) -> None:
+    if lens == "charter":
+        match = _CHARTER_REF.fullmatch(ref)
+        values = getattr(req.charter, match.group(1), None) if match and req.charter else None
+        if match is None or match.group(1) not in CHARTER_LISTS or values is None:
+            raise GuardError(f"ref {ref!r}: use charter:<field>[i] with a field of the charter")
+        if int(match.group(2)) >= len(values):
+            raise GuardError(f"ref {ref!r}: the charter has no such line")
+    elif lens == "risk":
+        if ref not in {f"risk:{o.obligation_id}" for o in req.obligations}:
+            raise GuardError(f"ref {ref!r}: not an obligation of this request")
+    elif lens == "directive":
+        if ref not in {f"directive:{i}" for i in _directives(req)}:
+            raise GuardError(f"ref {ref!r}: not a researcher directive in the notebook")
+    elif ref not in {f"integrity:{t}" for t in INTEGRITY_TAGS}:
+        raise GuardError(f"ref {ref!r}: use integrity:<tag>, tag one of {list(INTEGRITY_TAGS)}")
+
+
+def check_report(raw: dict[str, Any], req: ConsultationRequest) -> CriticReport:
+    """The Critic's report is valid only if every point is anchored to a lens and every
+    obligation of the request has one status."""
+    summary = str(raw.get("summary") or "").strip()
+    if not summary:
+        raise GuardError("`summary` is required: one or two sentences")
+    raw_points = raw.get("points") or []
+    if not isinstance(raw_points, list):
+        raise GuardError("`points` must be a list")
+    if len(raw_points) > MAX_POINTS:
+        raise GuardError(f"at most {MAX_POINTS} points; keep the strongest")
+    points = []
+    for i, item in enumerate(raw_points, 1):
+        if not isinstance(item, dict):
+            raise GuardError("each point must be an object")
+        try:
+            point = CriticPoint.model_validate(item | {"point_id": f"C{i}"})
+        except ValidationError as exc:
+            error = exc.errors()[0]
+            raise GuardError(f"point {i} is invalid at {error['loc']}: {error['msg']}") from None
+        if not point.point.strip():
+            raise GuardError(f"point {i} has no text")
+        try:
+            _check_ref(point.lens, point.ref, req)
+        except GuardError as exc:
+            raise GuardError(f"point {i}: {exc}") from None
+        points.append(point)
+
+    raw_checks = raw.get("obligations") or []
+    if not isinstance(raw_checks, list):
+        raise GuardError("`obligations` must be a list")
+    checks = []
+    for item in raw_checks:
+        try:
+            checks.append(ObligationCheck.model_validate(item))
+        except ValidationError:
+            raise GuardError(
+                "each obligation check needs obligation_id and status controlled|unresolved"
+            ) from None
+    expected = [o.obligation_id for o in req.obligations]
+    given = [c.obligation_id for c in checks]
+    if sorted(given) != sorted(expected):
+        raise GuardError(
+            f"`obligations` must hold exactly one check for each of {expected}; you gave {given}"
+        )
+    for c in checks:
+        if c.status == "controlled" and not (c.locator or "").strip():
+            raise GuardError(f"{c.obligation_id}: controlled needs a locator in the artifact")
+        if c.status == "unresolved" and not (c.note or "").strip():
+            raise GuardError(f"{c.obligation_id}: unresolved needs a note saying what is missing")
+
+    serious = any(p.severity == "serious" for p in points)
+    verdict = "serious" if serious else "concerns" if points else "sound"
+    if raw.get("verdict") != verdict:
+        raise GuardError(
+            f"verdict must be {verdict!r} for these points (serious iff any serious point; "
+            "concerns iff only minor points; sound iff none)"
+        )
+    return CriticReport(verdict=verdict, summary=summary[:600], points=points, obligations=checks)

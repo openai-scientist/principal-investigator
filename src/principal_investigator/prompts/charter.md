@@ -3,7 +3,8 @@ Task: write the research charter for this run, before any work starts.
 The charter is the run's pre-registration. Later you will judge every artifact against it, and you
 may not quietly move its criteria after seeing results. Make it specific enough to decide with.
 
-Work from the topic, the research profile and any researcher directives in the notebook. Do not
+Work from the topic, the research profile and any researcher directives in the notebook. Cite
+each directive in `directives_applied` with how the charter follows it. Do not
 claim facts about the literature; you have not searched it yet. The platform's scope is empirical
 Machine Learning (ml) and Software Engineering (se) research of three types: comparative_benchmark,
 controlled_experiment, ablation. Prefer public datasets and benchmarks. The budget is in the

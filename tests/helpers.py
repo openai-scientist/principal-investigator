@@ -108,7 +108,7 @@ def request(kind: str = "stage_outcome", **overrides) -> ConsultationRequest:
         "api_key": "secret-key-value",
     }
     data = {
-        "contract_version": "1.2.0",
+        "contract_version": "1.3.0",
         "consultation_id": "c-0001",
         "platform_run_id": "run-1",
         "kind": kind,

@@ -20,8 +20,6 @@ from tests.helpers import (
     tmp_store,
 )
 
-UPHOLD = call("verdict", verdict="uphold", points=[])
-
 
 def _setup(tmp_path, artifacts, lead_replies, critic_replies):
     platform = FakePlatform(artifacts)
@@ -51,8 +49,7 @@ async def test_consultation_runs_in_background_and_calls_back(tmp_path):
     content = blob(HYPOTHESES)
     req = request(artifacts=[ref("a1", content, schema="i2h.hypotheses/v1", role="primary")])
     accept = decision("accept", selection={"hypothesis_ids": ["H1"]})
-    pi = [call("consult_critic", proposal=accept), call("decide", **accept)]
-    platform, jobs, client = _setup(tmp_path, {"a1": content}, pi, [UPHOLD])
+    platform, jobs, client = _setup(tmp_path, {"a1": content}, [call("decide", **accept)], [])
     body = json.loads(req.model_dump_json(by_alias=True))
     body["models"]["lead"]["api_key"] = body["models"]["critic"]["api_key"] = "secret-key-value"
 
@@ -68,15 +65,44 @@ async def test_consultation_runs_in_background_and_calls_back(tmp_path):
 
     assert state.json()["status"] == "decided"
     assert platform.results[0]["decision"]["selection"] == {"hypothesis_ids": ["H1"]}
-    assert [t["tool"] for t in platform.results[0]["trace"]] == [
-        "verdict",
-        "consult_critic",
-        "decide",
-        "critic_effect",
-    ]
+    assert [t["tool"] for t in platform.results[0]["trace"]] == ["decide"]
     assert set(platform.seen_keys) == {KEY}
     stored = (tmp_path / "store" / "c-0001.json").read_text(encoding="utf-8")
     assert "secret-key-value" not in stored
+
+
+async def test_stage_review_runs_the_critic_and_returns_its_report(tmp_path):
+    req = request(kind="stage_review", authority="advise", allowed=[])
+    body = json.loads(req.model_dump_json(by_alias=True))
+    body["models"]["lead"]["api_key"] = body["models"]["critic"]["api_key"] = "secret-key-value"
+    report = call("report", verdict="sound", summary="Nothing to add.", points=[], obligations=[])
+    platform, jobs, client = _setup(tmp_path, {}, [], [report])
+    async with client:
+        sent = await client.post("/consultations", json=body, headers={"X-Service-Key": KEY})
+        assert sent.status_code == 202
+        await _drain(jobs)
+    result = platform.results[0]
+    assert result["status"] == "decided" and result["report"]["verdict"] == "sound"
+    assert result["report"]["model"] == "openai_compatible/c"
+    assert result["decision"] == {**result["decision"], "action": "report"}
+    stored = (tmp_path / "store" / "c-0001.json").read_text(encoding="utf-8")
+    assert "secret-key-value" not in stored
+
+
+async def test_gate_kinds_are_refused_with_422(tmp_path):
+    _, _, client = _setup(tmp_path, {}, [], [])
+    body = json.loads(request().model_dump_json(by_alias=True)) | {"kind": "gate_review"}
+    async with client:
+        response = await client.post("/consultations", json=body, headers={"X-Service-Key": KEY})
+        capabilities = await client.get("/capabilities", headers={"X-Service-Key": KEY})
+    assert response.status_code == 422 and "unsupported_kind" in response.text
+    assert capabilities.json()["kinds"] == [
+        "charter",
+        "stage_outcome",
+        "failure",
+        "close",
+        "stage_review",
+    ]
 
 
 async def test_agent_failure_is_reported_with_its_trace(tmp_path):

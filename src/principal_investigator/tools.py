@@ -1,7 +1,6 @@
 """The tools of the PI and of its Critic."""
 
 import json
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -9,21 +8,12 @@ import httpx
 
 from principal_investigator.agent import Outcome, Tool, ToolError
 from principal_investigator.contract import ConsultationRequest, NoteDraft, TraceStep
-from principal_investigator.guards import Draft, GuardError, check
+from principal_investigator.guards import Draft, GuardError, check, check_report
 from principal_investigator.llm import Meter
 from principal_investigator.workspace import ArtifactError, Workspace
 
 OPENALEX = "https://api.openalex.org/works"
 HF_DATASETS = "https://huggingface.co/api/datasets"
-#: Kinds whose decision has consequences: the PI must hear the Critic before deciding.
-#: Consequential decisions. A review gate is arbitration of the engine's own review (B17).
-NEEDS_CRITIC = {"charter", "stage_outcome"}
-#: The only kinds the Critic is offered for: hard-to-reverse calls. At gates the engine's own
-#: reviewer already challenges the work; live, the PI called the Critic there 54 of 85 times.
-CRITIC_KINDS = NEEDS_CRITIC | {"failure"}
-#: Decision fields the Critic must have seen exactly; notes and findings may be refined after.
-SUBSTANCE = ("action", "option_id", "selection", "target_stage_key")
-MAX_CRITIC_CALLS = 3
 NOTE_KINDS = ["lesson", "risk", "observation", "question"]
 
 
@@ -36,11 +26,8 @@ class Session:
     meter: Meter
     trace: list[TraceStep] = field(default_factory=list)
     notes: list[NoteDraft] = field(default_factory=list)
-    critiques: list[dict[str, Any]] = field(default_factory=list)
     transport: httpx.AsyncBaseTransport | None = None
     contact_email: str | None = None
-    #: Runs the Critic agent on a proposal; set by the deliberation module.
-    critic: Callable[[dict[str, Any], str], Awaitable[dict[str, Any]]] | None = None
 
 
 def _object(value: Any) -> Any:
@@ -81,6 +68,7 @@ def read_tools(s: Session) -> list[Tool]:
         kind = args.get("kind")
         lines = [
             f"- {e.at:%Y-%m-%d %H:%M} {e.actor}/{e.kind}"
+            + (f" (entry {e.entry_id})" if e.entry_id else "")
             + (f" [{e.stage_key}]" if e.stage_key else "")
             + f": {e.text}"
             for e in s.req.notebook
@@ -208,7 +196,8 @@ TOP_LEVEL = (
     "escalate",
     "handoff",
     "brief",
-    "critique_response",
+    "critic_response",
+    "directives_applied",
     "notebook",
 )
 
@@ -236,15 +225,22 @@ DECIDE_PARAMETERS = _schema(
         },
         "handoff": {"type": "array", "items": {"type": "string"}},
         "brief": {"type": "string"},
-        "critique_response": {
+        "critic_response": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "point": {"type": "string"},
+                    "point_id": {"type": "string"},
                     "response": {"type": "string", "enum": ["accepted", "rejected"]},
                     "reason": {"type": "string"},
                 },
+            },
+        },
+        "directives_applied": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"entry_id": {"type": "string"}, "how": {"type": "string"}},
             },
         },
     },
@@ -262,22 +258,6 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
         s.notes.append(NoteDraft(kind=kind, text=text[:600]))
         return "noted"
 
-    async def consult_critic(args: dict) -> str:
-        proposal = args["proposal"] = _object(args.get("proposal"))
-        if isinstance(proposal, dict):
-            if "decision" not in proposal and "action" in proposal:
-                # A bare decision: wrap it so the Critic sees the usual shape.
-                proposal = args["proposal"] = {"decision": proposal}
-            proposal["decision"] = _object(proposal.get("decision"))
-        if not isinstance(proposal, dict) or not isinstance(proposal.get("decision"), dict):
-            raise ToolError("proposal must be an object with a `decision` and your `rationale`")
-        if len(s.critiques) >= MAX_CRITIC_CALLS:
-            raise ToolError("you already consulted the Critic the maximum number of times")
-        assert s.critic is not None
-        verdict = await s.critic(proposal, str(args.get("questions") or ""))
-        s.critiques.append({"proposal": proposal, "verdict": verdict})
-        return json.dumps(verdict, ensure_ascii=False, indent=1)
-
     async def decide(args: dict) -> str:
         decision = args["decision"] = _object(args.get("decision"))
         if not isinstance(decision, dict):
@@ -286,24 +266,6 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
         for key in TOP_LEVEL:
             if key in decision and key not in args:
                 args[key] = _object(decision.pop(key))
-        if s.req.kind in NEEDS_CRITIC:
-            if not s.critiques:
-                raise ToolError("consult the Critic with your draft decision before deciding")
-            last = s.critiques[-1]
-            reviewed = last["proposal"]["decision"]
-            changed = [k for k in SUBSTANCE if reviewed.get(k) != decision.get(k)]
-            if changed:
-                raise ToolError(
-                    "your decision differs from the draft the Critic reviewed "
-                    f"({', '.join(changed)}); consult the Critic on this decision first"
-                )
-            majors = [p for p in last["verdict"].get("points", []) if p.get("severity") == "major"]
-            if majors and not args.get("critique_response"):
-                raise ToolError(
-                    "the Critic raised major points; answer each in `critique_response`, an "
-                    "argument of decide next to `decision` (accepted or rejected, with a "
-                    f"reason). You passed: {', '.join(sorted(args)) or 'nothing'}"
-                )
         try:
             draft: Draft = await check(args, s.req, s.ws)
         except GuardError as exc:
@@ -327,20 +289,6 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
             lambda a, o: f"noted a {a.get('kind')}",
         ),
         Tool(
-            "consult_critic",
-            "Ask the independent Scientific Critic to challenge a draft decision. Pass the full "
-            "draft as `proposal` (the same object you would pass to decide) and optional "
-            "`questions`. The Critic investigates with its own tools and returns a verdict.",
-            _schema(
-                {"proposal": {"type": "object"}, "questions": {"type": "string"}}, ["proposal"]
-            ),
-            consult_critic,
-            lambda a, o: (
-                "consulted the Critic on "
-                + str(((a.get("proposal") or {}).get("decision") or {}).get("action"))
-            ),
-        ),
-        Tool(
             "decide",
             "Finish with your decision. It is checked by code; if rejected, fix it and call "
             "decide again.",
@@ -349,55 +297,73 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
             lambda a, o: f"decided {(a.get('decision') or {}).get('action')}",
         ),
     ]
-    return [t for t in tools if t.name != "consult_critic" or s.req.kind in CRITIC_KINDS]
+    return tools
 
 
-# -- Critic-only terminal tool -------------------------------------------------------------
+# -- Critic tools --------------------------------------------------------------------------
+
+CRITIC_READ_TOOLS = ("list_artifacts", "read_artifact", "read_notebook")
+
+REPORT_PARAMETERS = _schema(
+    {
+        "verdict": {"type": "string", "enum": ["sound", "concerns", "serious"]},
+        "summary": {"type": "string"},
+        "points": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "severity": {"type": "string", "enum": ["serious", "minor"]},
+                    "lens": {
+                        "type": "string",
+                        "enum": ["charter", "risk", "directive", "integrity"],
+                    },
+                    "ref": {"type": "string"},
+                    "locator": {"type": "string"},
+                    "point": {"type": "string"},
+                    "suggestion": {"type": "string"},
+                },
+            },
+        },
+        "obligations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "obligation_id": {"type": "string"},
+                    "status": {"type": "string", "enum": ["controlled", "unresolved"]},
+                    "locator": {"type": "string"},
+                    "note": {"type": "string"},
+                },
+            },
+        },
+    },
+    ["verdict", "summary", "points", "obligations"],
+)
 
 
 def critic_tools(s: Session, outcome: Outcome) -> list[Tool]:
-    async def verdict(args: dict) -> str:
-        value = args.get("verdict")
-        if value not in ("uphold", "revise"):
-            raise ToolError("verdict must be uphold or revise")
-        points = []
-        for p in args.get("points") or []:
-            if isinstance(p, dict) and str(p.get("point") or "").strip():
-                severity = "major" if p.get("severity") == "major" else "minor"
-                points.append({"severity": severity, "point": str(p["point"]).strip()[:800]})
-        if value == "revise" and not any(p["severity"] == "major" for p in points):
-            raise ToolError("revise needs at least one major point")
-        flags = [str(f).strip()[:400] for f in args.get("integrity_flags") or [] if str(f).strip()]
+    async def report(args: dict) -> str:
+        for key in ("points", "obligations"):
+            args[key] = _object(args.get(key))
+        try:
+            outcome.value = check_report(args, s.req)
+        except GuardError as exc:
+            raise ToolError(f"report rejected: {exc}") from exc
         outcome.done = True
-        outcome.value = {"verdict": value, "points": points, "integrity_flags": flags}
-        return "verdict recorded"
+        return "report recorded"
 
     return [
-        *read_tools(s),
+        *(t for t in read_tools(s) if t.name in CRITIC_READ_TOOLS),
         Tool(
-            "verdict",
-            "Finish with your verdict on the PI's proposal.",
-            _schema(
-                {
-                    "verdict": {"type": "string", "enum": ["uphold", "revise"]},
-                    "points": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "severity": {"type": "string", "enum": ["major", "minor"]},
-                                "point": {"type": "string"},
-                            },
-                        },
-                    },
-                    "integrity_flags": {"type": "array", "items": {"type": "string"}},
-                },
-                ["verdict", "points"],
-            ),
-            verdict,
+            "report",
+            "Finish with your report. It is checked by code; if rejected, fix it and call "
+            "report again.",
+            REPORT_PARAMETERS,
+            report,
             lambda a, o: (
-                f"verdict {a.get('verdict')} "
-                f"({sum(p.get('severity') == 'major' for p in a.get('points') or [])} major)"
+                f"report {a.get('verdict')} ({len(a.get('points') or [])} points, "
+                f"{len(a.get('obligations') or [])} obligations)"
             ),
         ),
     ]

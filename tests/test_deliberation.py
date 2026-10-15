@@ -1,12 +1,14 @@
-import pytest
+import json
 
-from principal_investigator.deliberation import DeliberationError, deliberate
+import pytest
+from pydantic import ValidationError
+
+from principal_investigator.deliberation import DeliberationError, briefing, deliberate
 from principal_investigator.llm import Meter
 from principal_investigator.tools import Session
 from principal_investigator.workspace import Workspace
 from tests.helpers import (
     FINDINGS_BLOCKED,
-    FINDINGS_PASSED,
     HYPOTHESES,
     KEY,
     FakePlatform,
@@ -20,10 +22,8 @@ from tests.helpers import (
     say,
 )
 
-UPHOLD = call("verdict", verdict="uphold", points=[])
 
-
-async def _run(req, pi_replies, critic_replies, artifacts=None, web=None):
+async def _run(req, pi_replies, artifacts=None, web=None):
     platform, web = FakePlatform(artifacts or {}), web or FakeWeb()
     meter = Meter()
     session = Session(
@@ -33,9 +33,9 @@ async def _run(req, pi_replies, critic_replies, artifacts=None, web=None):
         transport=web.transport,
     )
     lead = ScriptedLLM(pi_replies, role="lead", meter=meter)
-    critic = ScriptedLLM(critic_replies, role="critic", meter=meter)
+    critic = ScriptedLLM([], role="critic", meter=meter)
     result = await deliberate(req, session, lead=lead, critic=critic)
-    return result, lead, critic
+    return result, lead
 
 
 def _hypothesis_request(**overrides):
@@ -48,8 +48,36 @@ def _hypothesis_request(**overrides):
 
 ACCEPT_13 = decision("accept", selection={"hypothesis_ids": ["H1", "H3"]})
 
+ON_H1 = FINDINGS_BLOCKED | {
+    "findings": [
+        FINDINGS_BLOCKED["findings"][0] | {"anchor": {"locator": "hypothesis:H1/statement"}}
+    ]
+}
 
-async def test_pi_investigates_verifies_consults_critic_and_decides():
+
+def _blocked_request(findings=ON_H1, **overrides):
+    content, review = blob(HYPOTHESES), blob(findings)
+    req = request(
+        artifacts=[
+            ref("a1", content, schema="i2h.hypotheses/v1", role="primary"),
+            ref("r1", review, schema="review.findings/v1", role="review"),
+        ],
+        **overrides,
+    )
+    return req, {"a1": content, "r1": review}
+
+
+def _directive(entry_id="12", text="Use only public data."):
+    return {
+        "entry_id": entry_id,
+        "kind": "directive",
+        "text": text,
+        "actor": "user",
+        "at": "2026-10-10T00:00:00Z",
+    }
+
+
+async def test_pi_investigates_verifies_and_decides_without_a_critic_tool():
     req, artifacts = _hypothesis_request()
     web = FakeWeb()
     pi = [
@@ -62,134 +90,44 @@ async def test_pi_investigates_verifies_consults_critic_and_decides():
         call("consult_critic", proposal=ACCEPT_13),
         call("decide", **ACCEPT_13),
     ]
-    critic = [call("read_artifact", artifact_id="a1", section="H3"), UPHOLD]
-    result, lead, crit = await _run(req, pi, critic, artifacts, web)
+    result, lead = await _run(req, pi, artifacts, web)
 
     assert result.status == "decided"
     assert result.decision.selection == {"hypothesis_ids": ["H1", "H3"]}
     assert result.handoff == ["Prioritise H1"]
-    assert result.critique.verdict == "upheld"
-    assert set(result.usage) == {"lead", "critic"}
-    # The agent saw what it asked for, and only that.
+    assert result.critique is None
+    assert set(result.usage) == {"lead"}
     seen = lead.observations()
     assert "3 hypotheses" in seen[1] and '"risk": "high"' in seen[2]
     assert "natural_questions" in seen[3] and "license=cc-by-sa-3.0" in seen[3]
     assert "ACL" in seen[4]
+    assert seen[6] == "error: unknown tool 'consult_critic'"
     assert "Retrieval of misleading" not in lead.calls[0][1]["content"]  # not pre-stuffed
-    assert any("openalex" in q for q in web.queries)
-    # The trace tells the researcher what the PI and the Critic did, in order.
-    assert [(t.actor, t.tool) for t in result.trace] == [
-        ("pi", "list_artifacts"),
-        ("pi", "read_artifact"),
-        ("pi", "read_artifact"),
-        ("pi", "check_dataset"),
-        ("pi", "search_literature"),
-        ("pi", "write_note"),
-        ("critic", "read_artifact"),
-        ("critic", "verdict"),
-        ("pi", "consult_critic"),
-        ("pi", "decide"),
-        ("pi", "critic_effect"),
-    ]
-    assert result.trace[-1].summary == "Critic left the decision unchanged: accept"
+    assert [(t.actor, t.tool) for t in result.trace if t.actor != "pi"] == []
     assert result.trace[2].summary == "read a1 section 'H2'"
     assert any(n.kind == "risk" and "reranker" in n.text for n in result.notebook)
-    # The Critic got the proposal.
-    assert '"H3"' in crit.calls[0][1]["content"]
-
-
-async def test_consequential_decision_requires_the_critic_first():
-    req, artifacts = _hypothesis_request()
-    pi = [
-        call("decide", **ACCEPT_13),
-        call("consult_critic", proposal=ACCEPT_13),
-        call("decide", **ACCEPT_13),
-    ]
-    result, lead, _ = await _run(req, pi, [UPHOLD], artifacts)
-    assert result.trace[0].summary.startswith("decide failed: consult the Critic")
-
-
-async def test_major_critique_must_be_answered_and_a_changed_action_reviewed_again():
-    req, artifacts = _hypothesis_request()
-    revise = call(
-        "verdict",
-        verdict="revise",
-        points=[{"severity": "major", "point": "H3 lacks data; send back"}],
-    )
-    send_back = decision("send_back", target_stage_key="hypothesis", note="Need datasets")
-    answered = send_back | {
-        "critique_response": [
-            {"point": "H3 lacks data", "response": "accepted", "reason": "Verified"}
-        ]
-    }
-    pi = [
-        call("consult_critic", proposal=ACCEPT_13),
-        call("decide", **ACCEPT_13),  # major point not answered
-        call("decide", **send_back),  # action changed without review
-        call("consult_critic", proposal=send_back),
-        call("decide", **answered),
-    ]
-    result, lead, _ = await _run(req, pi, [revise, UPHOLD], artifacts)
-    errors = [o for o in lead.observations() if o.startswith("error")]
-    assert "answer each in `critique_response`" in errors[0]
-    assert "differs from the draft the Critic reviewed" in errors[1]
-    assert (
-        result.trace[-1].summary
-        == "Critic changed the decision (action, selection): accept -> send_back"
-    )
-    assert result.decision.target_stage_key == "hypothesis"
-    assert result.critique.verdict == "revised"
 
 
 async def test_guard_rejections_come_back_as_observations_the_agent_fixes():
     req, artifacts = _hypothesis_request()
     bad = decision("accept", selection={"hypothesis_ids": ["H9"]})
     good = decision("accept", selection={"hypothesis_ids": ["H1"]})
-    pi = [
-        call("consult_critic", proposal=bad),
-        call("decide", **bad),
-        call("consult_critic", proposal=good),
-        call("decide", **good),
-    ]
-    result, lead, _ = await _run(req, pi, [UPHOLD, UPHOLD], artifacts)
+    result, lead = await _run(req, [call("decide", **bad), call("decide", **good)], artifacts)
     assert result.decision.selection["hypothesis_ids"] == ["H1"]
-    assert "unknown ids ['H9']" in lead.observations()[1]
-
-
-async def test_changing_the_selection_after_the_critic_needs_a_new_review():
-    req, artifacts = _hypothesis_request()
-    reviewed = decision("accept", selection={"hypothesis_ids": ["H1"]})
-    swapped = decision("accept", selection={"hypothesis_ids": ["H3"]})
-    pi = [
-        call("consult_critic", proposal=reviewed),
-        call("decide", **swapped),
-        call("decide", **reviewed),
-    ]
-    result, lead, _ = await _run(req, pi, [UPHOLD], artifacts)
-    assert result.decision.selection["hypothesis_ids"] == ["H1"]
-    assert "differs from the draft the Critic reviewed (selection)" in lead.observations()[1]
+    assert "unknown ids ['H9']" in lead.observations()[0]
 
 
 async def test_a_malformed_decision_is_an_observation_not_a_crash():
     req, artifacts = _hypothesis_request()
-    pi = [
-        call("consult_critic", proposal=ACCEPT_13),
-        call("decide", decision="not json at all"),
-        call("decide", **ACCEPT_13),
-    ]
-    result, lead, _ = await _run(req, pi, [UPHOLD], artifacts)
+    pi = [call("decide", decision="not json at all"), call("decide", **ACCEPT_13)]
+    result, lead = await _run(req, pi, artifacts)
     assert result.status == "decided"
-    assert "`decision` must be an object" in lead.observations()[1]
+    assert "`decision` must be an object" in lead.observations()[0]
 
 
 async def test_text_without_a_tool_call_is_nudged_back_to_tools():
     req, artifacts = _hypothesis_request()
-    pi = [
-        say("Let me think."),
-        call("consult_critic", proposal=ACCEPT_13),
-        call("decide", **ACCEPT_13),
-    ]
-    result, lead, _ = await _run(req, pi, [UPHOLD], artifacts)
+    result, lead = await _run(req, [say("Let me think."), call("decide", **ACCEPT_13)], artifacts)
     assert result.status == "decided"
     assert "Continue by calling a tool" in lead.calls[1][-1]["content"]
 
@@ -197,7 +135,7 @@ async def test_text_without_a_tool_call_is_nudged_back_to_tools():
 async def test_step_limit_fails_the_consultation():
     req, artifacts = _hypothesis_request()
     with pytest.raises(DeliberationError) as error:
-        await _run(req, [call("list_artifacts")] * 24, [], artifacts)
+        await _run(req, [call("list_artifacts")] * 24, artifacts)
     assert error.value.code == "step_limit"
 
 
@@ -205,172 +143,226 @@ async def test_unreadable_artifact_is_an_observation_not_a_crash():
     req = request(artifacts=[ref("a1", b"other", schema="i2h.hypotheses/v1", role="primary")])
     pi = [
         call("read_artifact", artifact_id="a1"),
-        call("consult_critic", proposal=decision("stop", note="x")),
         call("decide", **decision("stop", note="Inputs unreadable")),
     ]
-    result, lead, _ = await _run(req, pi, [UPHOLD], {"a1": blob(HYPOTHESES)})
+    result, lead = await _run(req, pi, {"a1": blob(HYPOTHESES)})
     assert "sha256" in lead.observations()[0]
     assert result.decision.action == "stop"
 
 
-GATE_REVIEW = {
-    "gate_id": "g1",
-    "kind": "artifact_review",
-    "step_key": "review",
-    "prompt": "Review",
-    "artifact_ids": ["a1"],
-}
-
-
-def _review_request(findings):
-    content, review = blob(HYPOTHESES), blob(findings)
-    req = request(
-        kind="gate_review",
-        gate=GATE_REVIEW,
-        allowed=[{"action": "approve"}, {"action": "comment"}],
-        artifacts=[
-            ref("a1", content, schema="i2h.hypotheses/v1", role="primary"),
-            ref("r1", review, schema="review.findings/v1", role="review"),
-        ],
-    )
-    return req, {"a1": content, "r1": review}
-
-
-async def test_approve_while_review_blocks_becomes_an_integrity_escalation():
-    req, artifacts = _review_request(FINDINGS_BLOCKED)
-    approve = decision("approve")
-    pi = [call("decide", **approve)]
-    result, _, _ = await _run(req, pi, [], artifacts)
-    assert result.escalate.reason_code == "integrity"
-
-
-ON_H1 = FINDINGS_BLOCKED | {
-    "findings": [
-        FINDINGS_BLOCKED["findings"][0] | {"anchor": {"locator": "hypothesis:H1/statement"}}
-    ]
-}
-
-
-async def test_approve_is_allowed_when_blocking_findings_are_on_some_hypotheses_only():
-    req, artifacts = _review_request(ON_H1)
-    approve = decision("approve")
-    pi = [call("consult_critic", proposal=approve), call("decide", **approve)]
-    result, _, _ = await _run(req, pi, [UPHOLD], artifacts)
-    assert result.decision.action == "approve" and result.escalate is None
-
-
 async def test_accept_refuses_hypotheses_with_blocking_findings():
-    content, review = blob(HYPOTHESES), blob(ON_H1)
-    req = request(
-        artifacts=[
-            ref("a1", content, schema="i2h.hypotheses/v1", role="primary"),
-            ref("r1", review, schema="review.findings/v1", role="review"),
-        ]
-    )
-    with_h1 = ACCEPT_13
+    req, artifacts = _blocked_request()
     without = decision("accept", selection={"hypothesis_ids": ["H3"]})
-    pi = [
-        call("consult_critic", proposal=with_h1),
-        call("decide", **with_h1),
-        call("consult_critic", proposal=without),
-        call("decide", **without),
-    ]
-    result, lead, _ = await _run(req, pi, [UPHOLD, UPHOLD], {"a1": content, "r1": review})
+    result, lead = await _run(
+        req, [call("decide", **ACCEPT_13), call("decide", **without)], artifacts
+    )
     assert result.decision.selection == {"hypothesis_ids": ["H3"]}
-    assert "['H1'] still have blocking review findings" in lead.observations()[1]
+    assert "['H1'] still have blocking review findings" in lead.observations()[0]
 
 
 async def test_accept_takes_a_blocked_hypothesis_named_as_a_known_risk():
-    content, review = blob(HYPOTHESES), blob(ON_H1)
-    req = request(
-        artifacts=[
-            ref("a1", content, schema="i2h.hypotheses/v1", role="primary"),
-            ref("r1", review, schema="review.findings/v1", role="review"),
-        ]
-    )
+    req, artifacts = _blocked_request()
     risk = "Known risk H1 (F2 leakage): the plan must split by source before tuning."
-    pi = [
-        call("consult_critic", proposal=ACCEPT_13),
-        call("decide", **(ACCEPT_13 | {"handoff": [risk]})),
-    ]
-    result, _, _ = await _run(req, pi, [UPHOLD], {"a1": content, "r1": review})
+    result, _ = await _run(req, [call("decide", **(ACCEPT_13 | {"handoff": [risk]}))], artifacts)
     assert result.decision.selection == {"hypothesis_ids": ["H1", "H3"]}
     assert result.handoff == [risk]
 
 
-async def test_approve_after_passed_review_has_no_escalation_and_no_handoff():
-    req, artifacts = _review_request(FINDINGS_PASSED)
-    approve = decision("approve")
-    pi = [
-        call("read_artifact", artifact_id="r1"),
-        call("consult_critic", proposal=approve),
-        call("decide", **approve),
-    ]
-    result, lead, _ = await _run(req, pi, [UPHOLD], artifacts)
-    assert "passed=True" in lead.observations()[0]
-    assert result.escalate is None and result.handoff == []
+async def test_accept_is_refused_when_the_whole_artifact_is_blocked():
+    req, artifacts = _blocked_request(FINDINGS_BLOCKED)
+    stop = decision("stop", note="Whole artifact blocked.")
+    result, lead = await _run(req, [call("decide", **ACCEPT_13), call("decide", **stop)], artifacts)
+    assert "blocking finding on the whole artifact" in lead.observations()[0]
+    assert result.decision.action == "stop"
 
 
-OWN_FINDING = {
-    "locator": "hypothesis:H2/statement",
-    "artifact_id": "not-known",
-    "severity": "major",
-    "category": "baseline",
-    "issue": "No baseline for charter:success_criteria[0]",
-    "suggestion": "Name BM25",
+# -- G-critic ------------------------------------------------------------------------------
+
+CRITIQUE = {
+    "verdict": "serious",
+    "summary": "A success criterion was weakened.",
+    "points": [
+        {
+            "point_id": "C1",
+            "severity": "serious",
+            "lens": "charter",
+            "ref": "charter:success_criteria[0]",
+            "point": "Hypotheses name no baseline.",
+        },
+        {
+            "point_id": "C2",
+            "severity": "minor",
+            "lens": "integrity",
+            "ref": "integrity:spin",
+            "point": "Wording is optimistic.",
+        },
+    ],
+    "obligations": [],
 }
 
 
-async def test_comment_findings_are_anchored_and_authored_as_the_research_lead():
-    req, artifacts = _review_request(FINDINGS_PASSED)
-    comment = decision("comment", findings=[OWN_FINDING])
-    result, _, _ = await _run(req, [call("decide", **comment)], [], artifacts)
-    finding = result.decision.findings[0]
-    assert finding.author == "researcher"
-    assert finding.anchor.artifact_id == "a1"
-
-
-async def test_comment_adopts_reviewer_findings_by_id_and_needs_no_critic():
-    req, artifacts = _review_request(ON_H1)
-    comment = decision("comment", adopt=["F2"])
-    result, _, _ = await _run(req, [call("decide", **comment)], [], artifacts)
-    (finding,) = result.decision.findings
-    assert finding.issue == "[F2] Leakage"
-    assert finding.anchor.locator == "hypothesis:H1/statement"
-    assert finding.severity == "blocking" and finding.author == "researcher"
-
-
-async def test_comment_refuses_unknown_ids_and_own_findings_that_restate_the_review():
-    req, artifacts = _review_request(ON_H1)
-    unknown = decision("comment", adopt=["F9"])
-    restated = decision("comment", findings=[OWN_FINDING | {"issue": "Leakage in H1"}])
-    good = decision("comment", adopt=["F2"])
-    pi = [call("decide", **unknown), call("decide", **restated), call("decide", **good)]
-    result, lead, _ = await _run(req, pi, [], artifacts)
-    assert "unknown reviewer finding ids ['F9']" in lead.observations()[0]
-    assert "must cite the charter line" in lead.observations()[1]
-    assert result.decision.findings[0].issue == "[F2] Leakage"
-
-
-async def test_small_gate_needs_no_critic_but_a_valid_option():
-    gate = {
-        "gate_id": "g2",
-        "kind": "question",
-        "prompt": "Which?",
-        "default_option_id": "o1",
-        "options": [{"option_id": "o1", "label": "A"}, {"option_id": "o2", "label": "B"}],
+async def test_every_serious_critic_point_needs_a_response():
+    req, artifacts = _hypothesis_request(critique=CRITIQUE)
+    answered = ACCEPT_13 | {
+        "critic_response": [{"point_id": "C1", "response": "rejected", "reason": "H1 names BM25."}]
     }
-    req = request(
-        kind="gate_question", gate=gate, allowed=[{"action": "answer", "option_ids": ["o1", "o2"]}]
+    result, lead = await _run(
+        req, [call("decide", **ACCEPT_13), call("decide", **answered)], artifacts
     )
-    pi = [
-        call("decide", **decision("answer", option_id="o3")),
-        call("decide", **decision("answer", option_id="o2")),
-    ]
-    result, lead, _ = await _run(req, pi, [])
-    assert result.decision.option_id == "o2"
-    assert result.critique is None
-    assert "option o1: A (engine default)" in lead.calls[0][1]["content"]
+    assert "serious points ['C1']" in lead.observations()[0]
+    (response,) = result.critic_response
+    assert (response.point_id, response.response) == ("C1", "rejected")
+    assert "Critic report (independent, own model): serious." in lead.calls[0][1]["content"]
+    assert "C1 [serious/charter charter:success_criteria[0]]" in lead.calls[0][1]["content"]
+
+
+async def test_a_response_without_a_reason_does_not_count():
+    req, artifacts = _hypothesis_request(critique=CRITIQUE)
+    empty = ACCEPT_13 | {
+        "critic_response": [{"point_id": "C1", "response": "accepted", "reason": " "}]
+    }
+    full = ACCEPT_13 | {
+        "critic_response": [{"point_id": "C1", "response": "accepted", "reason": "Verified."}]
+    }
+    result, lead = await _run(req, [call("decide", **empty), call("decide", **full)], artifacts)
+    assert "serious points ['C1']" in lead.observations()[0]
+    assert result.critic_response[0].reason == "Verified."
+
+
+async def test_a_minor_only_report_needs_no_response():
+    minor = CRITIQUE | {"verdict": "concerns", "points": CRITIQUE["points"][1:]}
+    req, artifacts = _hypothesis_request(critique=minor)
+    result, _ = await _run(req, [call("decide", **ACCEPT_13)], artifacts)
+    assert result.status == "decided" and result.critic_response == []
+
+
+async def test_briefing_says_when_the_critic_report_is_unavailable():
+    req, _ = _hypothesis_request()
+    assert "Critic report unavailable" in briefing(req, "(no artifacts)")
+
+
+# -- G-subset ------------------------------------------------------------------------------
+
+
+async def test_choosing_another_action_while_a_subset_is_sound_needs_an_accept_option():
+    req, artifacts = _blocked_request()
+    send_back = decision("send_back", target_stage_key="hypothesis", note="Redo it all")
+    argued = send_back | {
+        "options_considered": [
+            {
+                "action": "accept",
+                "summary": "H2 and H3 only",
+                "why_not": "H2 and H3 miss the question",
+            }
+        ]
+    }
+    result, lead = await _run(
+        req, [call("decide", **send_back), call("decide", **argued)], artifacts
+    )
+    assert "must include an `accept` option (a subset) with `why_not`" in lead.observations()[0]
+    assert result.decision.action == "send_back"
+    assert "you may select without a known risk: H2, H3" in lead.calls[0][1]["content"]
+
+
+async def test_no_subset_argument_is_needed_when_nothing_can_be_selected():
+    req, artifacts = _blocked_request(FINDINGS_BLOCKED)
+    stop = decision("stop", note="Whole artifact blocked.")
+    result, lead = await _run(req, [call("decide", **stop)], artifacts)
+    assert result.decision.action == "stop"
+    assert "No item can be selected without a known risk" in lead.calls[0][1]["content"]
+
+
+# -- G-directive ---------------------------------------------------------------------------
+
+
+async def test_every_researcher_directive_must_be_cited():
+    req, artifacts = _hypothesis_request(notebook=[_directive()])
+    cited = ACCEPT_13 | {
+        "directives_applied": [{"entry_id": "12", "how": "Both datasets are public."}]
+    }
+    result, lead = await _run(
+        req, [call("decide", **ACCEPT_13), call("decide", **cited)], artifacts
+    )
+    assert "directives ['12'] are not in `directives_applied`" in lead.observations()[0]
+    assert result.directives_applied[0].how == "Both datasets are public."
+    assert "entry 12: Use only public data." in lead.calls[0][1]["content"]
+
+
+async def test_escalation_waives_the_directive_citation():
+    req, artifacts = _hypothesis_request(notebook=[_directive()])
+    escalated = ACCEPT_13 | {
+        "escalate": {"reason_code": "integrity", "message": "The directive asks to hide a result."}
+    }
+    result, _ = await _run(req, [call("decide", **escalated)], artifacts)
+    assert result.escalate.reason_code == "integrity"
+
+
+async def test_directives_also_bind_the_charter_and_a_pi_note_is_not_a_directive():
+    note = _directive("13", "PI said so") | {"actor": "pi"}
+    req = request(
+        kind="charter",
+        charter=None,
+        allowed=[{"action": "charter"}],
+        notebook=[_directive(), note],
+    )
+    charter = decision(
+        "charter", charter={"question": "Q?", "objectives": ["O"], "success_criteria": ["S"]}
+    )
+    cited = charter | {"directives_applied": [{"entry_id": "12", "how": "Only public data."}]}
+    result, lead = await _run(req, [call("decide", **charter), call("decide", **cited)])
+    assert "directives ['12']" in lead.observations()[0]
+    assert result.decision.charter.question == "Q?"
+
+
+# -- G-close -------------------------------------------------------------------------------
+
+
+def _obligation(obligation_id, status):
+    return {
+        "obligation_id": obligation_id,
+        "source_stage_key": "hypothesis",
+        "item_id": "H1",
+        "finding_id": "F2",
+        "text": "Leakage",
+        "target_stage_key": "experiment_plan",
+        "status": status,
+    }
+
+
+async def test_the_closing_report_names_every_open_or_unresolved_obligation():
+    req = request(
+        kind="close",
+        allowed=[{"action": "report"}],
+        obligations=[
+            _obligation("R1", "unresolved"),
+            _obligation("R2", "controlled"),
+            _obligation("R3", "open"),
+        ],
+    )
+    partial = decision("report", note="Limitations: R10 is unclear and R1 stays unresolved.")
+    full = decision("report", note="Limitations: R1 is unresolved and R3 was never checked.")
+    result, lead = await _run(req, [call("decide", **partial), call("decide", **full)])
+    assert "missing ['R3']" in lead.observations()[0]
+    assert (
+        "R1 [unresolved] from hypothesis (H1, F2) for experiment_plan"
+        in lead.calls[0][1]["content"]
+    )
+    assert result.decision.note.startswith("Limitations: R1 is unresolved")
+
+
+async def test_a_closing_report_without_obligations_needs_no_limitations_list():
+    req = request(kind="close", allowed=[{"action": "report"}])
+    result, _ = await _run(req, [call("decide", **decision("report", note="Done."))])
+    assert result.decision.action == "report"
+
+
+# -- kinds ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["gate_question", "gate_review"])
+def test_gate_kinds_are_refused(kind):
+    with pytest.raises(ValidationError, match="unsupported_kind"):
+        request(kind=kind)
 
 
 async def test_charter_keeps_the_profile_the_researcher_chose():
@@ -386,44 +378,42 @@ async def test_charter_keeps_the_profile_the_researcher_chose():
             "profile": {"domain": "ml", "research_type": "ablation"},
         },
     )
-    pi = [call("consult_critic", proposal=charter), call("decide", **charter)]
-    result, _, _ = await _run(req, pi, [UPHOLD])
+    result, _ = await _run(req, [call("decide", **charter)])
     assert result.decision.charter.profile.domain == "se"
     assert result.decision.charter.profile.research_type == "ablation"
     assert result.handoff == ["Prioritise H1"]
 
 
-async def test_failure_kind_sees_the_failure_and_needs_no_critic():
+async def test_failure_kind_sees_the_failure():
     situation = request().situation.model_dump(mode="json") | {
         "failure": {"code": "engine_restarted", "message": "The engine restarted."}
     }
     req = request(
         kind="failure", situation=situation, allowed=[{"action": "rerun"}, {"action": "stop"}]
     )
-    pi = [call("decide", **decision("rerun", note="Transient restart."))]
-    result, lead, _ = await _run(req, pi, [])
+    result, lead = await _run(req, [call("decide", **decision("rerun", note="Transient restart."))])
     assert result.decision.action == "rerun"
     assert "engine_restarted: The engine restarted." in lead.calls[0][1]["content"]
 
 
 async def test_nested_objects_passed_as_json_strings_are_accepted():
-    import json
-
     req, artifacts = _hypothesis_request()
     as_text = ACCEPT_13 | {"decision": json.dumps(ACCEPT_13["decision"])}
-    pi = [call("consult_critic", proposal=json.dumps(ACCEPT_13)), call("decide", **as_text)]
-    result, _, _ = await _run(req, pi, [UPHOLD], artifacts)
+    result, _ = await _run(req, [call("decide", **as_text)], artifacts)
     assert result.decision.selection == {"hypothesis_ids": ["H1", "H3"]}
 
 
-async def test_a_bare_draft_for_the_critic_is_wrapped():
+async def test_decide_lifts_arguments_nested_in_the_decision():
     req, artifacts = _hypothesis_request()
-    pi = [
-        call("consult_critic", proposal=ACCEPT_13["decision"]),
-        call("decide", **ACCEPT_13),
-    ]
-    result, _, _ = await _run(req, pi, [UPHOLD], artifacts)
-    assert result.status == "decided"
+    nested = {
+        "decision": ACCEPT_13["decision"] | {k: v for k, v in ACCEPT_13.items() if k != "decision"}
+    }
+    result, _ = await _run(req, [call("decide", **nested)], artifacts)
+    assert result.decision.action == "accept"
+    assert result.rationale == ACCEPT_13["rationale"]
+
+
+# -- workspace and briefing ----------------------------------------------------------------
 
 
 async def test_catalogue_marks_the_current_attempt():
@@ -443,8 +433,6 @@ async def test_catalogue_marks_the_current_attempt():
 
 def test_briefing_states_today():
     from datetime import date
-
-    from principal_investigator.deliberation import briefing
 
     req, _ = _hypothesis_request()
     assert "Today is 2026-10-15 (UTC)" in briefing(req, "(no artifacts)", date(2026, 10, 15))
@@ -471,15 +459,6 @@ async def test_the_current_attempts_review_wins_over_an_earlier_higher_version()
     status = await ws.review_status("hypothesis")
     assert status.startswith("Latest independent review: blocking findings on H1; without one:")
     assert "H1," not in status.split("without one:")[1]
-
-
-async def test_decide_lifts_arguments_nested_in_the_decision():
-    req, artifacts = _review_request(FINDINGS_PASSED)
-    flat = decision("approve")
-    nested = {"decision": flat["decision"] | {k: v for k, v in flat.items() if k != "decision"}}
-    result, _, _ = await _run(req, [call("decide", **nested)], [], artifacts)
-    assert result.decision.action == "approve"
-    assert result.rationale == flat["rationale"]
 
 
 async def test_no_fallback_to_an_earlier_attempts_review():
@@ -522,35 +501,3 @@ async def test_briefing_survives_an_unreadable_review():
     )
     ws = Workspace(req.artifacts, KEY, transport=FakePlatform({"a1": content}).transport)
     assert await ws.review_status("hypothesis") is None
-
-
-async def test_own_finding_may_not_sit_on_an_adopted_findings_anchor():
-    req, artifacts = _review_request(ON_H1)
-    same = decision(
-        "comment",
-        adopt=["F2"],
-        findings=[OWN_FINDING | {"locator": "hypothesis:H1/statement"}],
-    )
-    good = decision("comment", adopt=["F2"], findings=[OWN_FINDING])
-    pi = [call("decide", **same), call("decide", **good)]
-    result, lead, _ = await _run(req, pi, [], artifacts)
-    assert "sit where an adopted reviewer finding already is" in lead.observations()[0]
-    assert len(result.decision.findings) == 2
-
-
-async def test_a_passed_review_is_not_sent_round_again_on_its_own_findings():
-    req, artifacts = _review_request(FINDINGS_PASSED)
-    adopt = decision("comment", adopt=["F1"])
-    pi = [call("decide", **adopt), call("decide", **decision("approve"))]
-    result, lead, _ = await _run(req, pi, [], artifacts)
-    assert "the review has no blocking finding: approve" in lead.observations()[0]
-    assert result.decision.action == "approve"
-
-
-async def test_the_critic_is_not_offered_at_a_review_gate():
-    req, artifacts = _review_request(ON_H1)
-    approve = decision("approve")
-    pi = [call("consult_critic", proposal=approve), call("decide", **approve)]
-    result, lead, _ = await _run(req, pi, [], artifacts)
-    assert lead.observations()[0] == "error: unknown tool 'consult_critic'"
-    assert result.decision.action == "approve"

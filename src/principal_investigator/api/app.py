@@ -18,7 +18,7 @@ from principal_investigator.jobs import Jobs
 from principal_investigator.settings import VERSION, Settings
 from principal_investigator.store import Store
 
-KINDS = ["charter", "gate_question", "gate_review", "stage_outcome", "failure", "close"]
+KINDS = ["charter", "stage_outcome", "failure", "close", "stage_review"]
 
 
 def create_app(settings: Settings, *, jobs: Jobs | None = None) -> FastAPI:

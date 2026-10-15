@@ -1,24 +1,22 @@
-"""One consultation: the PI agent investigates, consults its Critic agent, and decides."""
+"""One consultation: the PI agent investigates and decides, or the Critic agent reviews a stage."""
 
-import json
 from datetime import UTC, date, datetime
 from importlib import resources
-from typing import Any
 
 from principal_investigator.agent import AgentLimit, Outcome, run_agent
 from principal_investigator.contract import (
     ConsultationRequest,
     ConsultationResult,
-    Critique,
-    NoteDraft,
-    TraceStep,
+    CriticReport,
+    Obligation,
 )
-from principal_investigator.guards import Draft
+from principal_investigator.critic import run_critic
+from principal_investigator.guards import Draft, selectable
 from principal_investigator.llm import ChatLLM, LLMError
-from principal_investigator.tools import SUBSTANCE, Session, critic_tools, pi_tools
+from principal_investigator.tools import Session, pi_tools
+from principal_investigator.workspace import ArtifactError
 
 PI_MAX_STEPS = 24
-CRITIC_MAX_STEPS = 10
 TOKEN_CAP = 600_000
 
 AUTHORITY_TEXT = {
@@ -74,8 +72,12 @@ def briefing(
         # Without it, models judge recent papers by their training cutoff and call them
         # "future-dated" (seen in a live run).
         f"Today is {today.isoformat()} (UTC). Work published up to today is not future-dated.",
-        f"Interaction mode: {req.interaction_mode}. Your authority here: "
-        f"{AUTHORITY_TEXT[req.authority]}",
+        f"Interaction mode: {req.interaction_mode}."
+        + (
+            ""
+            if req.kind == "stage_review"
+            else f" Your authority here: {AUTHORITY_TEXT[req.authority]}"
+        ),
         f"Topic given by the researcher: {req.topic}",
         f"Research profile: domain={req.profile.domain}, research_type={req.profile.research_type}",
         "",
@@ -103,15 +105,19 @@ def briefing(
         out.append(f"The stage failed: {s.failure.code}: {s.failure.message}")
     if review:
         out.append(review)
-    if req.gate is not None:
-        g = req.gate
-        out.append(f"Gate {g.gate_id} ({g.kind}) at step {g.step_key}: {g.prompt}")
-        for option in g.options:
-            mark = " (engine default)" if option.option_id == g.default_option_id else ""
-            out.append(f"- option {option.option_id}: {option.label}{mark}")
-        if g.artifact_ids:
-            out.append(f"Artifacts under review: {', '.join(g.artifact_ids)}")
-    out.append("Allowed actions:")
+    if req.critique is not None:
+        out += _critic_lines(req.critique)
+    elif req.kind == "stage_outcome":
+        out.append("Critic report unavailable: decide without it.")
+    if req.obligations:
+        out.append("Accepted risks (obligations):")
+        out += [_obligation_line(o) for o in req.obligations]
+    directives = [e for e in req.notebook if e.kind == "directive" and e.actor == "user"]
+    if directives := [e for e in directives if e.entry_id]:
+        out.append("Researcher directives (cite each in `directives_applied`):")
+        out += [f"- entry {e.entry_id}: {e.text}" for e in directives]
+    if req.allowed:
+        out.append("Allowed actions:")
     for a in req.allowed:
         extra = []
         if a.option_ids:
@@ -123,42 +129,72 @@ def briefing(
         out.append(f"- {a.action}" + (f" ({'; '.join(extra)})" if extra else ""))
     recent = req.notebook[-8:]
     out += ["", f"# Lab notebook: {len(req.notebook)} entries (most recent below; read_notebook)"]
-    out += [f"- {e.actor}/{e.kind}: {e.text}" for e in recent] or ["(empty)"]
+    out += [
+        f"- {e.actor}/{e.kind}" + (f" (entry {e.entry_id})" if e.entry_id else "") + f": {e.text}"
+        for e in recent
+    ] or ["(empty)"]
     out += ["", "# Artifacts you can read", catalog]
     return "\n".join(out)
+
+
+def _obligation_line(o: Obligation) -> str:
+    where = ", ".join(x for x in (o.item_id, o.finding_id) if x)
+    return (
+        f"- {o.obligation_id} [{o.status}] from {o.source_stage_key}"
+        + (f" ({where})" if where else "")
+        + f" for {o.target_stage_key}: {o.text}"
+        + (f" (controlled at {o.locator})" if o.locator else "")
+        + (f" (note: {o.note})" if o.note else "")
+    )
+
+
+def _critic_lines(report: CriticReport) -> list[str]:
+    out = [f"Critic report (independent, own model): {report.verdict}. {report.summary}"]
+    out += [
+        f"- {p.point_id} [{p.severity}/{p.lens} {p.ref}]"
+        + (f" @ {p.locator}" if p.locator else "")
+        + f": {p.point}"
+        + (f" Suggestion: {p.suggestion}" if p.suggestion else "")
+        for p in report.points
+    ]
+    out += [
+        f"- obligation {c.obligation_id}: {c.status}"
+        + (f" at {c.locator}" if c.locator else "")
+        + (f" ({c.note})" if c.note else "")
+        for c in report.obligations
+    ]
+    return out
+
+
+async def _stage_lines(req: ConsultationRequest, session: Session) -> str | None:
+    """Review facts for the briefing: what the latest review blocks, and what may go on."""
+    stage = req.situation.stage_key
+    status = await session.ws.review_status(stage)
+    accept = req.allowed_for("accept")
+    if req.kind != "stage_outcome" or not (accept and accept.selection_key):
+        return status
+    try:
+        free = await selectable(session.ws, stage)
+    except ArtifactError:
+        return status
+    line = (
+        f"Items you may select without a known risk: {', '.join(free)}."
+        if free
+        else "No item can be selected without a known risk."
+    )
+    return f"{status}\n{line}" if status else line
 
 
 async def deliberate(
     req: ConsultationRequest, session: Session, *, lead: ChatLLM, critic: ChatLLM
 ) -> ConsultationResult:
     review = (
-        await session.ws.review_status(req.situation.stage_key)
-        if req.kind in ("gate_review", "stage_outcome")
-        else None
+        await _stage_lines(req, session) if req.kind in ("stage_review", "stage_outcome") else None
     )
     start = briefing(req, session.ws.catalog(), review=review)
+    if req.kind == "stage_review":
+        return await _review(req, session, critic, start)
 
-    async def run_critic(proposal: dict[str, Any], questions: str) -> dict[str, Any]:
-        outcome = Outcome()
-        user = (
-            f"{start}\n\n# The PI's proposal\n{json.dumps(proposal, ensure_ascii=False, indent=1)}"
-            + (f"\n\n# The PI asks you\n{questions}" if questions else "")
-        )
-        return await run_agent(
-            critic,
-            system=prompt("critic"),
-            user=user,
-            tools=critic_tools(session, outcome),
-            outcome=outcome,
-            actor="critic",
-            trace=session.trace,
-            meter=session.meter,
-            max_steps=CRITIC_MAX_STEPS,
-            token_cap=TOKEN_CAP,
-            terminal="verdict",
-        )
-
-    session.critic = run_critic
     outcome = Outcome()
     try:
         draft: Draft = await run_agent(
@@ -180,18 +216,6 @@ async def deliberate(
         raise DeliberationError("llm_failed", str(exc)) from exc
 
     _keep_researcher_profile(draft, req)
-    points = [p for c in session.critiques for p in c["verdict"].get("points", [])]
-    flags = [f for c in session.critiques for f in c["verdict"].get("integrity_flags", [])]
-    notebook = [*session.notes, *draft.notebook]
-    notebook += [NoteDraft(kind="risk", text=f"Critic integrity flag: {f}") for f in flags]
-    critique = None
-    if session.critiques:
-        session.trace.append(_critic_effect(session.critiques[0]["proposal"], draft.decision))
-        revised = any(c["verdict"].get("verdict") == "revise" for c in session.critiques)
-        critique = Critique(
-            verdict="revised" if revised else "upheld",
-            points=[f"[{p['severity']}] {p['point']}" for p in points],
-        )
     return ConsultationResult(
         consultation_id=req.consultation_id,
         status="decided",
@@ -202,11 +226,40 @@ async def deliberate(
         evidence=draft.evidence,
         assumptions=draft.assumptions,
         would_change_my_mind=draft.would_change_my_mind,
-        critique=critique,
+        critic_response=draft.critic_response,
+        directives_applied=draft.directives_applied,
         escalate=draft.escalate,
         handoff=draft.handoff,
-        notebook=notebook,
+        notebook=[*session.notes, *draft.notebook],
         brief=draft.brief,
+        usage=dict(session.meter.usage),
+        trace=session.trace,
+    )
+
+
+async def _review(
+    req: ConsultationRequest, session: Session, critic: ChatLLM, start: str
+) -> ConsultationResult:
+    try:
+        report = await run_critic(
+            req, session, critic, system=prompt("critic"), start=start, token_cap=TOKEN_CAP
+        )
+    except AgentLimit as exc:
+        raise DeliberationError(exc.code, str(exc)) from exc
+    except LLMError as exc:
+        raise DeliberationError("llm_failed", str(exc)) from exc
+    serious = sum(p.severity == "serious" for p in report.points)
+    return ConsultationResult(
+        consultation_id=req.consultation_id,
+        status="decided",
+        decision={"action": "report", "note": report.summary},
+        rationale=report.summary,
+        report=report,
+        brief=(
+            f"The Critic reviewed {req.situation.stage_key}: {report.verdict}. "
+            f"It raised {serious} serious and {len(report.points) - serious} minor points and "
+            f"checked {len(report.obligations)} accepted risks."
+        ),
         usage=dict(session.meter.usage),
         trace=session.trace,
     )
@@ -221,17 +274,3 @@ def _keep_researcher_profile(draft: Draft, req: ConsultationRequest) -> None:
         charter.profile.domain = req.profile.domain
     if req.profile.research_type:
         charter.profile.research_type = req.profile.research_type
-
-
-def _critic_effect(proposal: dict, decision) -> TraceStep:
-    """Measure the Critic: did the decision change after it, or only the wording?"""
-    first = proposal.get("decision") or {}
-    final = decision if isinstance(decision, dict) else decision.model_dump(mode="json")
-    changed = [k for k in SUBSTANCE if first.get(k) and first.get(k) != final.get(k)]
-    summary = (
-        f"Critic changed the decision ({', '.join(changed)}): "
-        f"{first.get('action')} -> {final.get('action')}"
-        if changed
-        else f"Critic left the decision unchanged: {final.get('action')}"
-    )
-    return TraceStep(actor="pi", tool="critic_effect", summary=summary)

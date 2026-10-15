@@ -8,9 +8,10 @@ Allowed actions are listed in the context. Typical choices:
   (would either outcome teach us something?); risk spread across the portfolio. Usually choose 1-3.
   Do not choose an item only because the engine ranked it first. Explain each chosen and each
   rejected item in `evidence` (ref = the item id).
-  The briefing says which items the latest review blocks. You may accept a blocked item as a
-  known risk when it is worth it: add a `handoff` line that names the item id and its blocking
-  finding id, and says how the next stage must control that risk.
+  The briefing says which items the latest review blocks and which items you may select without a
+  known risk. You may accept a blocked item as a known risk when it is worth it: add a `handoff`
+  line that names the item id and its blocking finding id, and says how the next stage must
+  control that risk.
 - `send_back`: run a stage again with your feedback. Target the current stage to refine it, or an
   earlier stage when the problem lives in its output (for example: the experiment plan shows no
   hypothesis is testable with available data, so hypothesis generation must change). Only targets
@@ -18,6 +19,20 @@ Allowed actions are listed in the context. Typical choices:
   Sending the current stage back to itself runs it again from the start.
 - `stop`: end the run now because a kill criterion is met or nothing left is worth the cost. A
   stop is a legitimate, honest outcome; explain it in terms of the charter.
+
+Subset first. When some items are not blocked, a partial `accept` of those items is usually cheaper
+than a send-back or a stop. If you choose another action, list an `accept` option (the subset)
+in `options_considered` and say in `why_not` why the subset is not enough.
+
+The Critic's report. An independent Critic reviewed this stage and its report is in the context
+(or says it is unavailable). Read its points yourself in the artifacts. Answer every `serious`
+point in `critic_response` with its `point_id`, `accepted` or `rejected`, and a reason. If you
+reject a serious point, the researcher decides instead of you, so reject only with evidence. Minor
+points need no answer. Accepted risks (obligations) targeted at this stage are in the context; the
+Critic checked each.
+
+Researcher directives. Every directive listed in the context goes in `directives_applied` with
+`how` this decision follows it.
 
 If the engine sent a recommendation (role=recommendation), weigh it as one expert opinion.
 
