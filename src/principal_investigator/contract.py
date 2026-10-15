@@ -11,10 +11,14 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
-CONTRACT_VERSION = "1.2.0"
+CONTRACT_VERSION = "1.3.0"
 SERVICE_KEY_HEADER = "X-Service-Key"
 
-Kind = Literal["charter", "gate_question", "gate_review", "stage_outcome", "failure", "close"]
+Kind = Literal[
+    "charter", "gate_question", "gate_review", "stage_outcome", "failure", "close", "stage_review"
+]
+#: Kept in `Kind` for wire compatibility; the Platform no longer sends them and the PI refuses them.
+GATE_KINDS = ("gate_question", "gate_review")
 Action = Literal[
     "charter", "answer", "approve", "comment", "accept", "send_back", "stop", "rerun", "report"
 ]
@@ -109,6 +113,7 @@ class ConsultArtifact(Wire):
 
 
 class NotebookEntry(Wire):
+    entry_id: str | None = None
     kind: str
     text: str
     actor: Literal["pi", "user"]
@@ -131,6 +136,58 @@ class PIModels(BaseModel):
     critic: ModelConfig
 
 
+class Obligation(Wire):
+    """A risk accepted at one stage that a later stage must control."""
+
+    obligation_id: str
+    source_stage_key: str
+    item_id: str | None = None
+    finding_id: str | None = None
+    text: str
+    target_stage_key: str
+    status: Literal["open", "controlled", "unresolved"] = "open"
+    locator: str | None = None
+    note: str | None = None
+    checked_by: str | None = None
+
+
+class CriticPoint(Wire):
+    point_id: str
+    severity: Literal["serious", "minor"]
+    lens: Literal["charter", "risk", "directive", "integrity"]
+    ref: str
+    locator: str | None = None
+    point: str
+    suggestion: str | None = None
+
+
+class ObligationCheck(Wire):
+    obligation_id: str
+    status: Literal["controlled", "unresolved"]
+    locator: str | None = None
+    note: str | None = None
+
+
+class CriticReport(Wire):
+    verdict: Literal["sound", "concerns", "serious"]
+    summary: str
+    points: list[CriticPoint] = Field(default_factory=list)
+    obligations: list[ObligationCheck] = Field(default_factory=list)
+    model: str | None = None
+    model_shared_with: Literal["lead"] | None = None
+
+
+class CriticResponse(Wire):
+    point_id: str
+    response: Literal["accepted", "rejected"]
+    reason: str
+
+
+class DirectiveApplied(Wire):
+    entry_id: str
+    how: str
+
+
 class ConsultationRequest(Wire):
     contract_version: str
     consultation_id: str = Field(min_length=1)
@@ -146,6 +203,8 @@ class ConsultationRequest(Wire):
     allowed: list[AllowedAction] = Field(default_factory=list)
     artifacts: list[ConsultArtifact] = Field(default_factory=list)
     notebook: list[NotebookEntry] = Field(default_factory=list)
+    obligations: list[Obligation] = Field(default_factory=list)
+    critique: CriticReport | None = None
     models: PIModels
     callback_url: str
 
@@ -153,8 +212,8 @@ class ConsultationRequest(Wire):
     def validate_request(self) -> Self:
         if not compatible(self.contract_version):
             raise ValueError("incompatible contract_version")
-        if self.kind in ("gate_question", "gate_review") and self.gate is None:
-            raise ValueError("gate kinds require gate")
+        if self.kind in GATE_KINDS:
+            raise ValueError(f"unsupported_kind: the PI no longer decides {self.kind}")
         if self.kind != "charter" and self.charter is None:
             raise ValueError("every kind except charter requires the charter")
         return self
@@ -254,6 +313,9 @@ class ConsultationResult(Wire):
     assumptions: list[str] = Field(default_factory=list)
     would_change_my_mind: list[str] = Field(default_factory=list)
     critique: Critique | None = None
+    report: CriticReport | None = None
+    critic_response: list[CriticResponse] = Field(default_factory=list)
+    directives_applied: list[DirectiveApplied] = Field(default_factory=list)
     escalate: Escalation | None = None
     handoff: list[str] = Field(default_factory=list)
     notebook: list[NoteDraft] = Field(default_factory=list)
