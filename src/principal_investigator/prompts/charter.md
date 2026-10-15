@@ -4,8 +4,9 @@ The charter is the run's pre-registration. Later you will judge every artifact a
 may not quietly move its criteria after seeing results. Make it specific enough to decide with.
 
 Work from the topic, the research profile and any researcher directives in the notebook. Cite
-each directive in `directives_applied` with how the charter follows it. Do not
-claim facts about the literature; you have not searched it yet. The platform's scope is empirical
+each directive in `directives_applied` with how the charter follows it. Claim a fact about the
+literature or a dataset only after checking it with search_literature or check_dataset; name
+what you checked. The platform's scope is empirical
 Machine Learning (ml) and Software Engineering (se) research of three types: comparative_benchmark,
 controlled_experiment, ablation. Prefer public datasets and benchmarks. The budget is in the
 situation; keep the scope feasible for it.
