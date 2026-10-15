@@ -69,7 +69,13 @@ class Jobs:
             transport=self.transport,
             current_stage_run=req.situation.stage_run_id,
         )
-        session = Session(req=req, ws=ws, meter=meter, transport=self.web_transport)
+        session = Session(
+            req=req,
+            ws=ws,
+            meter=meter,
+            transport=self.web_transport,
+            contact_email=self.settings.contact_email,
+        )
         try:
             timeout = self.settings.llm_timeout_seconds
             lead = self.llm_factory(req.models.lead, role="lead", meter=meter, timeout=timeout)

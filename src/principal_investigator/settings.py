@@ -14,6 +14,8 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8003
     llm_timeout_seconds: float = 180.0
+    #: Sent to OpenAlex as ``mailto`` so lookups use its polite pool.
+    contact_email: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -26,4 +28,5 @@ class Settings:
             host=os.environ.get("PI_HOST", "127.0.0.1"),
             port=int(os.environ.get("PI_PORT", "8003")),
             llm_timeout_seconds=float(os.environ.get("PI_LLM_TIMEOUT_SECONDS", "180")),
+            contact_email=os.environ.get("PI_CONTACT_EMAIL") or None,
         )

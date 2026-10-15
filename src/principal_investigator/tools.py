@@ -34,6 +34,7 @@ class Session:
     notes: list[NoteDraft] = field(default_factory=list)
     critiques: list[dict[str, Any]] = field(default_factory=list)
     transport: httpx.AsyncBaseTransport | None = None
+    contact_email: str | None = None
     #: Runs the Critic agent on a proposal; set by the deliberation module.
     critic: Callable[[dict[str, Any], str], Awaitable[dict[str, Any]]] | None = None
 
@@ -94,6 +95,8 @@ def read_tools(s: Session) -> list[Tool]:
             "per-page": limit,
             "select": "display_name,publication_year,cited_by_count,doi,primary_location",
         }
+        if s.contact_email:
+            params["mailto"] = s.contact_email
         data = await _get_json(s, OPENALEX, params)
         rows = []
         for w in data.get("results", []):
