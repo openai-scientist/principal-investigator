@@ -18,7 +18,8 @@ Allowed actions are listed in the context. Typical choices:
   in the allowed list are possible. Check the iteration count: a send-back uses one iteration.
   Sending the current stage back to itself runs it again from the start.
 - `stop`: end the run now because a kill criterion is met or nothing left is worth the cost. A
-  stop is a legitimate, honest outcome; explain it in terms of the charter.
+  stop is a legitimate, honest outcome; explain it in terms of the charter. When no fixable problem
+  is open (see below), a stop needs `escalate`: the researcher confirms it.
 
 Subset first. When some items are not blocked, a partial `accept` of those items is usually cheaper
 than a send-back or a stop. If you choose another action, list an `accept` option (the subset)

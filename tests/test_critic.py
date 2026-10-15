@@ -251,6 +251,7 @@ async def test_report_guards_return_to_the_critic_as_tool_errors(bad, message):
         ("hypothesis:H9", False),
         ("section:hypotheses", True),
         ("section:No Such Heading", False),
+        ("section:a", False),  # a substring of the text, not a heading
         ("document:a1", True),
         ("a1", True),
         ("document:zzz", False),
@@ -361,6 +362,21 @@ async def test_a_maintained_point_is_not_added_when_the_critic_listed_it():
     result, _, _ = await _review(req, replies, artifacts)
     assert [p.point for p in result.report.points] == ["Still optimistic, restated."]
     assert result.report.points[0].severity == "serious"
+
+
+async def test_a_maintained_point_relisted_as_minor_stays_serious():
+    req, artifacts = _repeat()
+    replies = [
+        call("report", **_repeat_report("concerns", [MINOR], [RESOLVED, MAINTAINED])),
+        call("report", **_repeat_report("serious", [MINOR], [RESOLVED, MAINTAINED])),
+    ]
+    result, critic, _ = await _review(req, replies, artifacts)
+    assert "maintained resolution" in critic.observations()[0]
+    assert result.report.verdict == "serious"
+    assert [(p.severity, p.ref) for p in result.report.points] == [
+        ("minor", "integrity:spin"),
+        ("serious", "integrity:spin"),
+    ]
 
 
 async def test_a_new_charter_point_in_a_repeat_review_is_minor_but_integrity_stays():

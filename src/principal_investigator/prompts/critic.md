@@ -44,5 +44,5 @@ Give every point a `fix_class`, which says who can resolve it:
 
 Finish by calling `report` with `verdict`, `summary` (one or two sentences), `points` (at most 8;
 each has severity, lens, ref, point, fix_class, and optionally locator and suggestion) and `obligations` (and `resolutions` in a repeat review).
-`verdict` is `serious` if any point is serious, `concerns` if all points are minor, `sound` if
-there are no points. Code checks the report; if it is rejected, read why and call `report` again.
+`verdict` is `serious` if any point is serious or any resolution is `maintained`, `concerns` if
+all points are minor, `sound` if there are no points. Code checks the report; if it is rejected, read why and call `report` again.

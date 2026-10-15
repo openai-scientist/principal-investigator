@@ -20,7 +20,7 @@ from principal_investigator.contract import (
     ObligationCheck,
     PIDecision,
 )
-from principal_investigator.workspace import ArtifactError, Workspace
+from principal_investigator.workspace import _HEADING, ArtifactError, Workspace
 
 MAX_POINTS = 8
 CHARTER_LISTS = (
@@ -317,6 +317,8 @@ def _named(hypothesis: str, finding_ids: set[str], lines: list[str]) -> bool:
 _CHARTER_REF = re.compile(r"charter:(\w+)\[(\d+)\]")
 
 
+_JSON_KEY = re.compile(r'"([^"\\]+)"\s*:')
+
 _LOCATOR_FORMS = (
     "hypothesis:<id> (a current item id), section:<heading> (a heading of the artifact), "
     "or document:<name> / an artifact id from the catalog"
@@ -333,13 +335,17 @@ async def _check_locator(
     try:
         if kind == "hypothesis" and value:
             ok = value.split("/", 1)[0] in await ws.current_ids(stage)
-        elif kind == "section" and value:
-            ok = value.lower() in (await ws.primary_text(stage) or "").lower()
+        elif kind == "section" and len(wanted := value.lstrip("#").strip().lower()) >= 3:
+            text = await ws.primary_text(stage) or ""
+            # Sections are Markdown headings, or keys of a JSON artifact.
+            names = [m.group(2) for m in _HEADING.finditer(text)]
+            if text.lstrip().startswith(("{", "[")):
+                names += _JSON_KEY.findall(text)
+            ok = any(wanted in name.lower() for name in names)
         elif kind == "document" and value:
             ok = any(value in (r.artifact_id, r.schema_id.split("/")[0]) for r in ws.refs.values())
         else:
             ok = locator in ws.refs
-            kind = ""
     except ArtifactError:
         return  # the artifact cannot be read, so the locator cannot be verified
     if not ok:
@@ -429,7 +435,8 @@ async def check_report(
     ]
     resolutions = _check_resolutions(raw.get("resolutions"), prior)
     maintained = [r for r in resolutions if r.status == "maintained"]
-    kept = {(p.lens, p.ref) for p in points}
+    # A maintained point stays serious even if the Critic relisted it as minor.
+    kept = {(p.lens, p.ref) for p in points if p.severity == "serious"}
     by_id = {p.point_id: p for p in prior}
     maintained_keys = {(by_id[r.point_id].lens, by_id[r.point_id].ref) for r in maintained}
     added = []
@@ -452,8 +459,8 @@ async def check_report(
     expected = _verdict([*points, *added])
     if raw.get("verdict") != expected:
         raise GuardError(
-            f"verdict must be {expected!r} for these points (serious iff any serious point; "
-            "concerns iff only minor points; sound iff none)"
+            f"verdict must be {expected!r} for these points (serious iff any serious point or "
+            "maintained resolution; concerns iff only minor points; sound iff none)"
         )
     if req.prior_critique is not None:
         # A repeat review keeps new serious points only for integrity and directive.
