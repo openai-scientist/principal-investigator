@@ -221,9 +221,14 @@ async def _check_actionable(
         return
     points = req.critique.points if req.critique else []
     accepted = {r.point_id for r in given if r.response == "accepted"}
+    # Any serious integrity point may stop the run; it rewinds a stage only when revising can
+    # fix it (live: "no completed leakage report" cannot be fixed by revising a plan).
     if any(
         p.severity == "serious"
-        and (p.lens == "integrity" or (p.fix_class == "fix" and p.point_id in accepted))
+        and (
+            (p.lens == "integrity" and (action == "stop" or p.fix_class == "fix"))
+            or (p.fix_class == "fix" and p.point_id in accepted)
+        )
         for p in points
     ):
         return

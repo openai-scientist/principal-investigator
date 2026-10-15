@@ -318,6 +318,16 @@ async def test_a_serious_integrity_point_makes_the_stage_fixable():
     assert result.decision.action == "stop"
 
 
+async def test_an_integrity_point_that_needs_evidence_does_not_justify_a_send_back():
+    point = _point("C1", "needs_evidence", lens="integrity", ref="integrity:leakage")
+    req, artifacts = _hypothesis_request(critique=_critique(point))
+    final = _answer(ACCEPT_13, "C1")
+    _, lead = await _run(
+        req, [call("decide", **_answer(SEND_BACK, "C1")), call("decide", **final)], artifacts
+    )
+    assert NOT_FIXABLE in lead.observations()[0]
+
+
 async def test_a_blocking_review_finding_of_kind_fix_makes_the_stage_fixable():
     findings = ON_H1 | {"findings": [ON_H1["findings"][0] | {"kind": "fix"}]}
     req, artifacts = _blocked_request(findings)

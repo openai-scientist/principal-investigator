@@ -34,7 +34,8 @@ Critic checked each.
 
 Only a problem that revising this stage can fix justifies `send_back`, `rerun` or `stop`: a serious
 Critic point with fix_class `fix` that you accept, a blocking engine finding of kind `fix`, or an
-integrity point. Points that need evidence or belong to a later stage travel in `handoff` as known
+integrity point (any integrity point may justify `stop`; only one with fix_class `fix` justifies
+a send-back or rerun). Points that need evidence or belong to a later stage travel in `handoff` as known
 risks, or you set `escalate`.
 
 Researcher directives. Every directive listed in the context goes in `directives_applied` with
