@@ -180,6 +180,17 @@ async def test_accept_is_refused_when_the_whole_artifact_is_blocked():
     assert result.decision.action == "stop"
 
 
+async def test_a_whole_artifact_finding_that_needs_evidence_does_not_refuse_accept():
+    # Live: an unverified benchmark (needs_evidence) on the whole plan left the PI only escalate.
+    evidence = FINDINGS_BLOCKED | {
+        "findings": [FINDINGS_BLOCKED["findings"][0] | {"kind": "needs_evidence"}]
+    }
+    req, artifacts = _blocked_request(evidence)
+    result, lead = await _run(req, [call("decide", **ACCEPT_13)], artifacts)
+    assert lead.observations() == []
+    assert result.decision.action == "accept"
+
+
 # -- G-critic ------------------------------------------------------------------------------
 
 CRITIQUE = {

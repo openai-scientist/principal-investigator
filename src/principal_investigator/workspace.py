@@ -136,7 +136,8 @@ class Workspace:
         """Blocking findings of the latest review: (whole artifact blocked, id -> finding ids).
 
         A blocking finding anchored to ``hypothesis:<id>`` blocks that id only; any other
-        blocking finding blocks the whole artifact. ``None`` when there is no review.
+        blocking finding of kind ``fix`` blocks the whole artifact (one that needs evidence or
+        a tool travels as a known risk: revising cannot fix it). ``None`` when there is no review.
         """
         doc = await self._latest_review(stage_key)
         if not isinstance(doc, dict):
@@ -151,7 +152,7 @@ class Workspace:
                 ids.setdefault(hypothesis, set())
                 if finding.get("finding_id"):
                     ids[hypothesis].add(str(finding["finding_id"]))
-            else:
+            elif finding.get("kind", "fix") == "fix":  # an older engine sends no kind
                 whole = True
         return whole, ids
 

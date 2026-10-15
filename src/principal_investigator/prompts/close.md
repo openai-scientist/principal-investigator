@@ -5,6 +5,9 @@ are met and which are not; the key decisions you and the researcher made (from t
 why; open risks and threats to validity; what the researcher should do next (for example, which
 experiment to run first). Do not oversell.
 
+A criterion is met only when the artifact states it concretely (numbers, named versions, a
+verified resource). A criterion the plan defers to a pilot or a launch gate is not met yet: say so.
+
 End the report with a Limitations section. It names, by id (for example R1), every accepted risk
 (obligation) in the context that is not controlled (status open or unresolved), and says what it
 means for the conclusions. Name each id separately (R1, R2, R3), never as a range
