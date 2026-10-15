@@ -89,7 +89,9 @@ async def test_pi_investigates_verifies_consults_critic_and_decides():
         ("critic", "verdict"),
         ("pi", "consult_critic"),
         ("pi", "decide"),
+        ("pi", "critic_effect"),
     ]
+    assert result.trace[-1].summary == "Critic left the decision unchanged: accept"
     assert result.trace[2].summary == "read a1 section 'H2'"
     assert any(n.kind == "risk" and "reranker" in n.text for n in result.notebook)
     # The Critic got the proposal.
@@ -131,6 +133,10 @@ async def test_major_critique_must_be_answered_and_a_changed_action_reviewed_aga
     errors = [o for o in lead.observations() if o.startswith("error")]
     assert "answer each in `critique_response`" in errors[0]
     assert "differs from the draft the Critic reviewed" in errors[1]
+    assert (
+        result.trace[-1].summary
+        == "Critic changed the decision (action, selection): accept -> send_back"
+    )
     assert result.decision.target_stage_key == "hypothesis"
     assert result.critique.verdict == "revised"
 
@@ -233,8 +239,8 @@ def _review_request(findings):
 async def test_approve_while_review_blocks_becomes_an_integrity_escalation():
     req, artifacts = _review_request(FINDINGS_BLOCKED)
     approve = decision("approve")
-    pi = [call("consult_critic", proposal=approve), call("decide", **approve)]
-    result, _, _ = await _run(req, pi, [UPHOLD], artifacts)
+    pi = [call("decide", **approve)]
+    result, _, _ = await _run(req, pi, [], artifacts)
     assert result.escalate.reason_code == "integrity"
 
 
@@ -538,4 +544,13 @@ async def test_a_passed_review_is_not_sent_round_again_on_its_own_findings():
     pi = [call("decide", **adopt), call("decide", **decision("approve"))]
     result, lead, _ = await _run(req, pi, [], artifacts)
     assert "the review has no blocking finding: approve" in lead.observations()[0]
+    assert result.decision.action == "approve"
+
+
+async def test_the_critic_is_not_offered_at_a_review_gate():
+    req, artifacts = _review_request(ON_H1)
+    approve = decision("approve")
+    pi = [call("consult_critic", proposal=approve), call("decide", **approve)]
+    result, lead, _ = await _run(req, pi, [], artifacts)
+    assert lead.observations()[0] == "error: unknown tool 'consult_critic'"
     assert result.decision.action == "approve"

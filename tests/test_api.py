@@ -72,6 +72,7 @@ async def test_consultation_runs_in_background_and_calls_back(tmp_path):
         "verdict",
         "consult_critic",
         "decide",
+        "critic_effect",
     ]
     assert set(platform.seen_keys) == {KEY}
     stored = (tmp_path / "store" / "c-0001.json").read_text(encoding="utf-8")

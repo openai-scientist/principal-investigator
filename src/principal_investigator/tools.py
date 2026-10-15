@@ -18,6 +18,9 @@ HF_DATASETS = "https://huggingface.co/api/datasets"
 #: Kinds whose decision has consequences: the PI must hear the Critic before deciding.
 #: Consequential decisions. A review gate is arbitration of the engine's own review (B17).
 NEEDS_CRITIC = {"charter", "stage_outcome"}
+#: The only kinds the Critic is offered for: hard-to-reverse calls. At gates the engine's own
+#: reviewer already challenges the work; live, the PI called the Critic there 54 of 85 times.
+CRITIC_KINDS = NEEDS_CRITIC | {"failure"}
 #: Decision fields the Critic must have seen exactly; notes and findings may be refined after.
 SUBSTANCE = ("action", "option_id", "selection", "target_stage_key")
 MAX_CRITIC_CALLS = 3
@@ -310,7 +313,7 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
         outcome.done, outcome.value = True, draft
         return "decision recorded"
 
-    return [
+    tools = [
         *read_tools(s),
         Tool(
             "write_note",
@@ -346,6 +349,7 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
             lambda a, o: f"decided {(a.get('decision') or {}).get('action')}",
         ),
     ]
+    return [t for t in tools if t.name != "consult_critic" or s.req.kind in CRITIC_KINDS]
 
 
 # -- Critic-only terminal tool -------------------------------------------------------------

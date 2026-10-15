@@ -11,10 +11,11 @@ from principal_investigator.contract import (
     ConsultationResult,
     Critique,
     NoteDraft,
+    TraceStep,
 )
 from principal_investigator.guards import Draft
 from principal_investigator.llm import ChatLLM, LLMError
-from principal_investigator.tools import Session, critic_tools, pi_tools
+from principal_investigator.tools import SUBSTANCE, Session, critic_tools, pi_tools
 
 PI_MAX_STEPS = 24
 CRITIC_MAX_STEPS = 10
@@ -185,6 +186,7 @@ async def deliberate(
     notebook += [NoteDraft(kind="risk", text=f"Critic integrity flag: {f}") for f in flags]
     critique = None
     if session.critiques:
+        session.trace.append(_critic_effect(session.critiques[0]["proposal"], draft.decision))
         revised = any(c["verdict"].get("verdict") == "revise" for c in session.critiques)
         critique = Critique(
             verdict="revised" if revised else "upheld",
@@ -219,3 +221,17 @@ def _keep_researcher_profile(draft: Draft, req: ConsultationRequest) -> None:
         charter.profile.domain = req.profile.domain
     if req.profile.research_type:
         charter.profile.research_type = req.profile.research_type
+
+
+def _critic_effect(proposal: dict, decision) -> TraceStep:
+    """Measure the Critic: did the decision change after it, or only the wording?"""
+    first = proposal.get("decision") or {}
+    final = decision if isinstance(decision, dict) else decision.model_dump(mode="json")
+    changed = [k for k in SUBSTANCE if first.get(k) and first.get(k) != final.get(k)]
+    summary = (
+        f"Critic changed the decision ({', '.join(changed)}): "
+        f"{first.get('action')} -> {final.get('action')}"
+        if changed
+        else f"Critic left the decision unchanged: {final.get('action')}"
+    )
+    return TraceStep(actor="pi", tool="critic_effect", summary=summary)
