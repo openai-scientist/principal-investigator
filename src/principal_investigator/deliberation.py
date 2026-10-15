@@ -1,6 +1,7 @@
 """One consultation: the PI agent investigates, consults its Critic agent, and decides."""
 
 import json
+from datetime import UTC, date, datetime
 from importlib import resources
 from typing import Any
 
@@ -61,11 +62,15 @@ def _charter_lines(req: ConsultationRequest) -> list[str]:
     return lines
 
 
-def briefing(req: ConsultationRequest, catalog: str) -> str:
+def briefing(req: ConsultationRequest, catalog: str, today: date | None = None) -> str:
     """What the agent knows when it starts. Artifacts are listed, not included: it reads them."""
     s = req.situation
+    today = today or datetime.now(UTC).date()
     out = [
         "# Run",
+        # Without it, models judge recent papers by their training cutoff and call them
+        # "future-dated" (seen in a live run).
+        f"Today is {today.isoformat()} (UTC). Work published up to today is not future-dated.",
         f"Interaction mode: {req.interaction_mode}. Your authority here: "
         f"{AUTHORITY_TEXT[req.authority]}",
         f"Topic given by the researcher: {req.topic}",

@@ -396,3 +396,12 @@ async def test_catalogue_marks_the_current_attempt():
     catalog = ws.catalog()
     assert "a1: i2h.hypotheses/v1 v1, role=primary, stage=hypothesis, current attempt" in catalog
     assert "a0: i2h.hypotheses/v1 v1, role=primary, stage=hypothesis, earlier attempt" in catalog
+
+
+def test_briefing_states_today():
+    from datetime import date
+
+    from principal_investigator.deliberation import briefing
+
+    req, _ = _hypothesis_request()
+    assert "Today is 2026-10-15 (UTC)" in briefing(req, "(no artifacts)", date(2026, 10, 15))
