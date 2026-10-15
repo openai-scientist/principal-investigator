@@ -117,6 +117,11 @@ class Workspace:
         latest = self._latest([r for r in self.refs.values() if r.role == "primary"], stage_key)
         return list(dict.fromkeys(await self.ids_of(latest.artifact_id))) if latest else []
 
+    async def primary_text(self, stage_key: str | None) -> str | None:
+        """Text of the latest primary artifact of the current attempt; None without one."""
+        latest = self._latest([r for r in self.refs.values() if r.role == "primary"], stage_key)
+        return await self.text(latest.artifact_id) if latest else None
+
     async def latest_review_passed(self, stage_key: str | None) -> bool | None:
         doc = await self._latest_review(stage_key)
         return doc.get("passed") if isinstance(doc, dict) else None

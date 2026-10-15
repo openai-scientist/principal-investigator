@@ -7,7 +7,8 @@ experiment to run first). Do not oversell.
 
 End the report with a Limitations section. It names, by id (for example R1), every accepted risk
 (obligation) in the context that is not controlled (status open or unresolved), and says what it
-means for the conclusions. Code rejects a report that leaves one out.
+means for the conclusions. Name each id separately (R1, R2, R3), never as a range
+(R1-R3). Code rejects a report that leaves one out.
 
 Decision format (the `decision` argument of `decide`):
 {"action": "report", "note": "<the report, 150-400 words, plain text with short paragraphs>"}

@@ -50,7 +50,7 @@ PI_DECISION = {
     "at": "2026-10-10T00:00:00Z",
 }
 CHECKS = [
-    {"obligation_id": "R1", "status": "controlled", "locator": "hypotheses/H1/falsification"},
+    {"obligation_id": "R1", "status": "controlled", "locator": "hypothesis:H1/falsification"},
     {"obligation_id": "R2", "status": "unresolved", "note": "No baseline named."},
 ]
 SERIOUS = {
@@ -139,6 +139,7 @@ async def test_stage_review_returns_a_guarded_report_from_the_critic_model():
     start = critic.calls[0][1]["content"]
     assert "R1 [open] from hypothesis (H1, F4-1) for hypothesis: H1 may leak test data" in start
     assert "charter:success_criteria[0]" in start and "entry 12: Use only public data." in start
+    assert "use `directive:<entry_id>` as a ref" in start and "directives_applied" not in start
     assert "Your authority" not in start and "Allowed actions" not in start
 
 
@@ -226,6 +227,32 @@ async def test_report_guards_return_to_the_critic_as_tool_errors(bad, message):
     first = critic.observations()[0]
     assert first.startswith("error: report rejected") and message in first
     assert result.report.verdict == "serious"
+
+
+@pytest.mark.parametrize(
+    ("locator", "ok"),
+    [
+        ("hypothesis:H1/falsification", True),
+        ("hypothesis:H9", False),
+        ("section:hypotheses", True),
+        ("section:No Such Heading", False),
+        ("document:a1", True),
+        ("a1", True),
+        ("document:zzz", False),
+        ("hypotheses/H1", False),
+    ],
+)
+async def test_a_controlled_locator_must_resolve_in_the_artifact(locator, ok):
+    req, artifacts = _stage_review()
+    checks = [CHECKS[0] | {"locator": locator}, CHECKS[1]]
+    replies = [call("report", **report(obligations=checks)), call("report", **report())]
+    result, critic, _ = await _review(req, replies, artifacts)
+    if ok:
+        assert result.report.obligations[0].locator == locator
+        assert critic.observations() == []
+    else:
+        assert "does not resolve" in critic.observations()[0]
+        assert "hypothesis:<id>" in critic.observations()[0]
 
 
 async def test_a_directive_ref_must_be_a_user_directive():

@@ -114,7 +114,11 @@ def briefing(
         out += [_obligation_line(o) for o in req.obligations]
     directives = [e for e in req.notebook if e.kind == "directive" and e.actor == "user"]
     if directives := [e for e in directives if e.entry_id]:
-        out.append("Researcher directives (cite each in `directives_applied`):")
+        out.append(
+            "Researcher directives (use `directive:<entry_id>` as a ref):"
+            if req.kind == "stage_review"
+            else "Researcher directives (cite each in `directives_applied`):"
+        )
         out += [f"- entry {e.entry_id}: {e.text}" for e in directives]
     if req.allowed:
         out.append("Allowed actions:")
@@ -177,11 +181,12 @@ async def _stage_lines(req: ConsultationRequest, session: Session) -> str | None
         free = await selectable(session.ws, stage)
     except ArtifactError:
         return status
-    line = (
-        f"Items you may select without a known risk: {', '.join(free)}."
-        if free
-        else "No item can be selected without a known risk."
-    )
+    if free:
+        line = f"Items you may select without a known risk: {', '.join(free)}."
+    elif await session.ws.current_ids(stage):
+        line = "No item can be selected without a known risk."
+    else:
+        return status
     return f"{status}\n{line}" if status else line
 
 

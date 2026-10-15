@@ -347,7 +347,7 @@ def critic_tools(s: Session, outcome: Outcome) -> list[Tool]:
         for key in ("points", "obligations"):
             args[key] = _object(args.get(key))
         try:
-            outcome.value = check_report(args, s.req)
+            outcome.value = await check_report(args, s.req, s.ws)
         except GuardError as exc:
             raise ToolError(f"report rejected: {exc}") from exc
         outcome.done = True

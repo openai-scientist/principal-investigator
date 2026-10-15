@@ -260,7 +260,8 @@ def _check_close(req: ConsultationRequest, note: str) -> None:
     ]:
         raise GuardError(
             f"the report must name every open or unresolved obligation by id; missing {missing}. "
-            "Add a Limitations section that lists each with what it means for the conclusions"
+            "Add a Limitations section that lists each with what it means for the conclusions. "
+            "Name each id separately (R1, R2, R3), not as a range such as R1-R3"
         )
 
 
@@ -286,6 +287,38 @@ def _named(hypothesis: str, finding_ids: set[str], lines: list[str]) -> bool:
 _CHARTER_REF = re.compile(r"charter:(\w+)\[(\d+)\]")
 
 
+_LOCATOR_FORMS = (
+    "hypothesis:<id> (a current item id), section:<heading> (a heading of the artifact), "
+    "or document:<name> / an artifact id from the catalog"
+)
+
+
+async def _check_locator(
+    obligation_id: str, locator: str, req: ConsultationRequest, ws: Workspace
+) -> None:
+    """A `controlled` claim must point at something that exists in the stage's artifact."""
+    stage = req.situation.stage_key
+    kind, _, value = locator.partition(":")
+    value = value.strip()
+    try:
+        if kind == "hypothesis" and value:
+            ok = value.split("/", 1)[0] in await ws.current_ids(stage)
+        elif kind == "section" and value:
+            ok = value.lower() in (await ws.primary_text(stage) or "").lower()
+        elif kind == "document" and value:
+            ok = any(value in (r.artifact_id, r.schema_id.split("/")[0]) for r in ws.refs.values())
+        else:
+            ok = locator in ws.refs
+            kind = ""
+    except ArtifactError:
+        return  # the artifact cannot be read, so the locator cannot be verified
+    if not ok:
+        raise GuardError(
+            f"{obligation_id}: locator {locator!r} does not resolve in the artifact; "
+            f"use {_LOCATOR_FORMS}"
+        )
+
+
 def _check_ref(lens: str, ref: str, req: ConsultationRequest) -> None:
     if lens == "charter":
         match = _CHARTER_REF.fullmatch(ref)
@@ -304,7 +337,9 @@ def _check_ref(lens: str, ref: str, req: ConsultationRequest) -> None:
         raise GuardError(f"ref {ref!r}: use integrity:<tag>, tag one of {list(INTEGRITY_TAGS)}")
 
 
-def check_report(raw: dict[str, Any], req: ConsultationRequest) -> CriticReport:
+async def check_report(
+    raw: dict[str, Any], req: ConsultationRequest, ws: Workspace
+) -> CriticReport:
     """The Critic's report is valid only if every point is anchored to a lens and every
     obligation of the request has one status."""
     summary = str(raw.get("summary") or "").strip()
@@ -352,6 +387,8 @@ def check_report(raw: dict[str, Any], req: ConsultationRequest) -> CriticReport:
     for c in checks:
         if c.status == "controlled" and not (c.locator or "").strip():
             raise GuardError(f"{c.obligation_id}: controlled needs a locator in the artifact")
+        if c.status == "controlled":
+            await _check_locator(c.obligation_id, c.locator.strip(), req, ws)
         if c.status == "unresolved" and not (c.note or "").strip():
             raise GuardError(f"{c.obligation_id}: unresolved needs a note saying what is missing")
 

@@ -272,6 +272,20 @@ async def test_no_subset_argument_is_needed_when_nothing_can_be_selected():
     assert "No item can be selected without a known risk" in lead.calls[0][1]["content"]
 
 
+async def test_nothing_is_said_about_selection_when_the_stage_has_no_item_ids():
+    content, review = blob({"summary": "no items"}), blob(FINDINGS_BLOCKED)
+    req = request(
+        artifacts=[
+            ref("a1", content, schema="other.doc/v1", role="primary"),
+            ref("r1", review, schema="review.findings/v1", role="review"),
+        ]
+    )
+    stop = decision("stop", note="Stopping.")
+    result, lead = await _run(req, [call("decide", **stop)], {"a1": content, "r1": review})
+    assert result.decision.action == "stop"
+    assert "can be selected" not in lead.calls[0][1]["content"]
+
+
 # -- G-directive ---------------------------------------------------------------------------
 
 
@@ -343,6 +357,7 @@ async def test_the_closing_report_names_every_open_or_unresolved_obligation():
     full = decision("report", note="Limitations: R1 is unresolved and R3 was never checked.")
     result, lead = await _run(req, [call("decide", **partial), call("decide", **full)])
     assert "missing ['R3']" in lead.observations()[0]
+    assert "not as a range" in lead.observations()[0]
     assert (
         "R1 [unresolved] from hypothesis (H1, F2) for experiment_plan"
         in lead.calls[0][1]["content"]
