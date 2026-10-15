@@ -11,7 +11,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
-CONTRACT_VERSION = "1.3.0"
+CONTRACT_VERSION = "1.4.0"
 SERVICE_KEY_HEADER = "X-Service-Key"
 
 Kind = Literal[
@@ -168,11 +168,18 @@ class ObligationCheck(Wire):
     note: str | None = None
 
 
+class CriticResolution(Wire):
+    point_id: str
+    status: Literal["resolved", "maintained"]
+    reason: str
+
+
 class CriticReport(Wire):
     verdict: Literal["sound", "concerns", "serious"]
     summary: str
     points: list[CriticPoint] = Field(default_factory=list)
     obligations: list[ObligationCheck] = Field(default_factory=list)
+    resolutions: list[CriticResolution] = Field(default_factory=list)
     model: str | None = None
     model_shared_with: Literal["lead"] | None = None
 
@@ -205,6 +212,7 @@ class ConsultationRequest(Wire):
     notebook: list[NotebookEntry] = Field(default_factory=list)
     obligations: list[Obligation] = Field(default_factory=list)
     critique: CriticReport | None = None
+    prior_critique: CriticReport | None = None
     models: PIModels
     callback_url: str
 

@@ -8,6 +8,9 @@ import httpx
 
 from principal_investigator.contract import ModelConfig, TokenUsage
 
+#: Seconds to wait before each retry: 5 attempts, about 52 s in all.
+RETRY_DELAYS = (2.0, 5.0, 15.0, 30.0)
+
 
 class LLMError(RuntimeError):
     pass
@@ -56,7 +59,7 @@ class OpenAICompatibleLLM:
         role: str,
         meter: Meter,
         timeout: float = 180.0,
-        max_attempts: int = 3,
+        retry_delays: tuple[float, ...] = RETRY_DELAYS,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         if cfg.provider != "openai_compatible":
@@ -66,9 +69,13 @@ class OpenAICompatibleLLM:
         self.cfg = cfg
         self.role = role
         self.meter = meter
-        self.max_attempts = max_attempts
+        self.retry_delays = retry_delays
         self.timeout = timeout
         self.transport = transport
+
+    async def _wait(self, attempt: int) -> None:
+        if attempt < len(self.retry_delays):
+            await asyncio.sleep(self.retry_delays[attempt])
 
     async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Reply:
         body: dict[str, Any] = {
@@ -82,16 +89,16 @@ class OpenAICompatibleLLM:
         headers = {"Authorization": f"Bearer {self.cfg.api_key.get_secret_value()}"}
         last_error = "no attempt"
         async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
-            for attempt in range(self.max_attempts):
+            for attempt in range(len(self.retry_delays) + 1):
                 try:
                     response = await client.post(url, json=body, headers=headers)
                 except httpx.RequestError as exc:
                     last_error = type(exc).__name__
-                    await asyncio.sleep(2**attempt)
+                    await self._wait(attempt)
                     continue
                 if response.status_code == 429 or response.status_code >= 500:
                     last_error = f"HTTP {response.status_code}"
-                    await asyncio.sleep(2**attempt)
+                    await self._wait(attempt)
                     continue
                 if response.status_code >= 400:
                     raise LLMError(f"model request rejected: HTTP {response.status_code}")
@@ -115,4 +122,6 @@ class OpenAICompatibleLLM:
                     int(usage.get("completion_tokens") or 0),
                 )
                 return Reply(content=message.get("content"), tool_calls=calls)
-        raise LLMError(f"model call failed after {self.max_attempts} attempts: {last_error}")
+        raise LLMError(
+            f"model call failed after {len(self.retry_delays) + 1} attempts: {last_error}"
+        )

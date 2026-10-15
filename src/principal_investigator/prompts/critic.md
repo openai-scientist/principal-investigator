@@ -29,7 +29,12 @@ For every obligation listed in the briefing, give exactly one check in `obligati
 - `unresolved` with a `note` (what is missing).
 If the briefing lists no obligations, pass an empty list.
 
+In a repeat review of the same stage, the briefing lists your earlier serious points. Give exactly
+one entry in `resolutions` for each (`point_id`, `status` `resolved` or `maintained`, `reason`).
+Raise a new serious point only for `integrity` or `directive` problems. Report any other new
+problem as `minor`; code downgrades new `charter` and `risk` points to minor anyway.
+
 Finish by calling `report` with `verdict`, `summary` (one or two sentences), `points` (at most 8;
-each has severity, lens, ref, point, and optionally locator and suggestion) and `obligations`.
+each has severity, lens, ref, point, and optionally locator and suggestion) and `obligations` (and `resolutions` in a repeat review).
 `verdict` is `serious` if any point is serious, `concerns` if all points are minor, `sound` if
 there are no points. Code checks the report; if it is rejected, read why and call `report` again.

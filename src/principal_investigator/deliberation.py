@@ -109,6 +109,8 @@ def briefing(
         out += _critic_lines(req.critique)
     elif req.kind == "stage_outcome":
         out.append("Critic report unavailable: decide without it.")
+    if req.kind == "stage_review" and req.prior_critique is not None:
+        out += _prior_lines(req.prior_critique)
     if req.obligations:
         out.append("Accepted risks (obligations):")
         out += [_obligation_line(o) for o in req.obligations]
@@ -150,6 +152,18 @@ def _obligation_line(o: Obligation) -> str:
         + (f" (controlled at {o.locator})" if o.locator else "")
         + (f" (note: {o.note})" if o.note else "")
     )
+
+
+def _prior_lines(report: CriticReport) -> list[str]:
+    serious = [p for p in report.points if p.severity == "serious"]
+    out = ["This is a repeat review of this stage. Your earlier report had these serious points:"]
+    out += [f"- {p.point_id} [{p.lens} {p.ref}]: {p.point}" for p in serious] or ["- (none)"]
+    out.append(
+        "Give one entry in `resolutions` for each of them: `resolved` or `maintained`, with a "
+        "reason. Raise a new serious point only for an integrity or directive problem; report "
+        "any other new problem as minor."
+    )
+    return out
 
 
 def _critic_lines(report: CriticReport) -> list[str]:

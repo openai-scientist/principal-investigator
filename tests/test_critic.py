@@ -267,3 +267,138 @@ async def test_the_critic_step_limit_fails_the_consultation():
     with pytest.raises(DeliberationError) as error:
         await _review(req, [call("list_artifacts")] * 12, artifacts)
     assert error.value.code == "step_limit"
+
+
+# -- R3: convergence in a repeat review ----------------------------------------------------
+
+PRIOR = {
+    "verdict": "serious",
+    "summary": "Two serious gaps.",
+    "points": [
+        {
+            "point_id": "C1",
+            "severity": "serious",
+            "lens": "charter",
+            "ref": "charter:success_criteria[0]",
+            "locator": "hypotheses/H2",
+            "point": "H2 names no baseline.",
+        },
+        {
+            "point_id": "C2",
+            "severity": "serious",
+            "lens": "integrity",
+            "ref": "integrity:spin",
+            "point": "The summary is optimistic.",
+        },
+        {
+            "point_id": "C3",
+            "severity": "minor",
+            "lens": "integrity",
+            "ref": "integrity:leakage",
+            "point": "Small leak.",
+        },
+    ],
+    "obligations": [],
+}
+RESOLVED = {"point_id": "C1", "status": "resolved", "reason": "H2 now names BM25."}
+MAINTAINED = {"point_id": "C2", "status": "maintained", "reason": "Still optimistic."}
+BOTH_RESOLVED = [RESOLVED, MAINTAINED | {"status": "resolved"}]
+
+
+def _repeat():
+    return _stage_review(prior_critique=PRIOR, obligations=[])
+
+
+def _repeat_report(verdict, points, resolutions):
+    return report(verdict, points=points, obligations=[]) | {"resolutions": resolutions}
+
+
+async def test_a_repeat_review_briefing_lists_the_earlier_serious_points():
+    req, artifacts = _repeat()
+    replies = [call("report", **_repeat_report("sound", [], BOTH_RESOLVED))]
+    _, critic, _ = await _review(req, replies, artifacts)
+    start = critic.calls[0][1]["content"]
+    assert "repeat review" in start and "- C1 [charter charter:success_criteria[0]]" in start
+    assert "- C2 [integrity integrity:spin]" in start and "Small leak" not in start
+    assert "only for an integrity or directive problem" in start
+
+
+async def test_maintained_points_stay_serious_and_resolved_ones_close():
+    req, artifacts = _repeat()
+    replies = [call("report", **_repeat_report("serious", [], [RESOLVED, MAINTAINED]))]
+    result, _, _ = await _review(req, replies, artifacts)
+    r = result.report
+    assert r.verdict == "serious"
+    assert [(p.point_id, p.severity, p.lens, p.ref) for p in r.points] == [
+        ("C1", "serious", "integrity", "integrity:spin")
+    ]
+    assert r.points[0].point == "[maintains C2] Still optimistic."
+    assert [(x.point_id, x.status) for x in r.resolutions] == [
+        ("C1", "resolved"),
+        ("C2", "maintained"),
+    ]
+
+
+async def test_a_maintained_point_is_not_added_when_the_critic_listed_it():
+    req, artifacts = _repeat()
+    listed = MINOR | {"severity": "serious", "point": "Still optimistic, restated."}
+    replies = [call("report", **_repeat_report("serious", [listed], [RESOLVED, MAINTAINED]))]
+    result, _, _ = await _review(req, replies, artifacts)
+    assert [p.point for p in result.report.points] == ["Still optimistic, restated."]
+    assert result.report.points[0].severity == "serious"
+
+
+async def test_a_new_charter_point_in_a_repeat_review_is_minor_but_integrity_stays():
+    req, artifacts = _repeat()
+    new_charter = SERIOUS | {"ref": "charter:success_criteria[0]", "point": "Second gap."}
+    new_integrity = MINOR | {
+        "severity": "serious",
+        "ref": "integrity:fabrication",
+        "point": "Invented.",
+    }
+    points = [new_charter, new_integrity]
+    replies = [call("report", **_repeat_report("serious", points, BOTH_RESOLVED))]
+    result, _, _ = await _review(req, replies, artifacts)
+    first, second = result.report.points
+    assert (first.severity, first.point) == ("minor", "[new in repeat review] Second gap.")
+    assert second.severity == "serious" and result.report.verdict == "serious"
+
+
+async def test_a_new_risk_point_is_downgraded_and_the_verdict_is_recomputed():
+    obligations = [OBLIGATIONS[0]]
+    req, artifacts = _stage_review(prior_critique=PRIOR, obligations=obligations)
+    new_risk = SERIOUS | {"lens": "risk", "ref": "risk:R1", "point": "R1 not handled."}
+    bad = _repeat_report("serious", [new_risk], BOTH_RESOLVED)
+    bad["obligations"] = [CHECKS[0]]
+    result, _, _ = await _review(req, [call("report", **bad)], artifacts)
+    assert result.report.verdict == "concerns"
+    assert result.report.points[0].severity == "minor"
+
+
+@pytest.mark.parametrize(
+    ("resolutions", "message"),
+    [
+        ([], "exactly one entry for each earlier serious point"),
+        ([RESOLVED], "exactly one entry"),
+        ([RESOLVED, RESOLVED, MAINTAINED], "exactly one entry"),
+        ([RESOLVED, MAINTAINED | {"point_id": "C3"}], "exactly one entry"),
+        ([RESOLVED, MAINTAINED | {"status": "done"}], "each resolution needs"),
+        ([RESOLVED, MAINTAINED | {"reason": " "}], "needs a reason"),
+    ],
+)
+async def test_a_repeat_review_needs_one_resolution_per_earlier_serious_point(resolutions, message):
+    req, artifacts = _repeat()
+    good = _repeat_report("serious", [], [RESOLVED, MAINTAINED])
+    replies = [call("report", **_repeat_report("sound", [], resolutions)), call("report", **good)]
+    result, critic, _ = await _review(req, replies, artifacts)
+    assert message in critic.observations()[0]
+    assert result.report.verdict == "serious"
+
+
+async def test_resolutions_are_rejected_when_there_is_no_earlier_report():
+    req, artifacts = _stage_review(obligations=[])
+    bad = report("sound", points=[], obligations=[]) | {"resolutions": [RESOLVED]}
+    replies = [call("report", **bad), call("report", **report("sound", points=[], obligations=[]))]
+    result, critic, _ = await _review(req, replies, artifacts)
+    assert "exactly one entry" in critic.observations()[0]
+    assert result.report.resolutions == []

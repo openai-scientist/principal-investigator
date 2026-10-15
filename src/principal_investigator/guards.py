@@ -11,6 +11,7 @@ from principal_investigator.contract import (
     ConsultationRequest,
     CriticPoint,
     CriticReport,
+    CriticResolution,
     CriticResponse,
     DirectiveApplied,
     Escalation,
@@ -392,11 +393,88 @@ async def check_report(
         if c.status == "unresolved" and not (c.note or "").strip():
             raise GuardError(f"{c.obligation_id}: unresolved needs a note saying what is missing")
 
-    serious = any(p.severity == "serious" for p in points)
-    verdict = "serious" if serious else "concerns" if points else "sound"
-    if raw.get("verdict") != verdict:
+    prior = [
+        p
+        for p in (req.prior_critique.points if req.prior_critique else [])
+        if p.severity == "serious"
+    ]
+    resolutions = _check_resolutions(raw.get("resolutions"), prior)
+    maintained = [r for r in resolutions if r.status == "maintained"]
+    kept = {(p.lens, p.ref) for p in points}
+    by_id = {p.point_id: p for p in prior}
+    maintained_keys = {(by_id[r.point_id].lens, by_id[r.point_id].ref) for r in maintained}
+    added = []
+    for r in maintained:
+        earlier = by_id[r.point_id]
+        if (earlier.lens, earlier.ref) in kept:
+            continue
+        added.append(
+            CriticPoint(
+                point_id=f"C{len(points) + len(added) + 1}",
+                severity="serious",
+                lens=earlier.lens,
+                ref=earlier.ref,
+                locator=earlier.locator,
+                point=f"[maintains {r.point_id}] {r.reason}",
+            )
+        )
+
+    expected = _verdict([*points, *added])
+    if raw.get("verdict") != expected:
         raise GuardError(
-            f"verdict must be {verdict!r} for these points (serious iff any serious point; "
+            f"verdict must be {expected!r} for these points (serious iff any serious point; "
             "concerns iff only minor points; sound iff none)"
         )
-    return CriticReport(verdict=verdict, summary=summary[:600], points=points, obligations=checks)
+    if req.prior_critique is not None:
+        # A repeat review keeps new serious points only for integrity and directive.
+        for p in points:
+            if (
+                p.severity == "serious"
+                and p.lens in ("charter", "risk")
+                and (p.lens, p.ref) not in maintained_keys
+            ):
+                p.severity = "minor"
+                p.point = f"{NEW_IN_REPEAT}{p.point}"
+    final = [*points, *added]
+    return CriticReport(
+        verdict=_verdict(final),
+        summary=summary[:600],
+        points=final,
+        obligations=checks,
+        resolutions=resolutions,
+    )
+
+
+NEW_IN_REPEAT = "[new in repeat review] "
+
+
+def _verdict(points: list[CriticPoint]) -> str:
+    if any(p.severity == "serious" for p in points):
+        return "serious"
+    return "concerns" if points else "sound"
+
+
+def _check_resolutions(raw: Any, prior: list[CriticPoint]) -> list[CriticResolution]:
+    """In a repeat review, each earlier serious point gets exactly one resolution."""
+    raw = raw or []
+    if not isinstance(raw, list):
+        raise GuardError("`resolutions` must be a list")
+    out = []
+    for item in raw:
+        try:
+            out.append(CriticResolution.model_validate(item))
+        except ValidationError:
+            raise GuardError(
+                "each resolution needs point_id, status resolved|maintained and reason"
+            ) from None
+    expected = [p.point_id for p in prior]
+    given = [r.point_id for r in out]
+    if sorted(given) != sorted(expected):
+        raise GuardError(
+            f"`resolutions` must hold exactly one entry for each earlier serious point "
+            f"{expected}; you gave {given}"
+        )
+    for r in out:
+        if not r.reason.strip():
+            raise GuardError(f"{r.point_id}: a resolution needs a reason")
+    return out

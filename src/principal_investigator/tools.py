@@ -340,11 +340,23 @@ REPORT_PARAMETERS = _schema(
     },
     ["verdict", "summary", "points", "obligations"],
 )
+REPORT_PARAMETERS["properties"]["resolutions"] = {
+    "type": "array",
+    "description": "Only in a repeat review: one entry for each earlier serious point.",
+    "items": {
+        "type": "object",
+        "properties": {
+            "point_id": {"type": "string"},
+            "status": {"type": "string", "enum": ["resolved", "maintained"]},
+            "reason": {"type": "string"},
+        },
+    },
+}
 
 
 def critic_tools(s: Session, outcome: Outcome) -> list[Tool]:
     async def report(args: dict) -> str:
-        for key in ("points", "obligations"):
+        for key in ("points", "obligations", "resolutions"):
             args[key] = _object(args.get(key))
         try:
             outcome.value = await check_report(args, s.req, s.ws)
