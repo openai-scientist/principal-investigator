@@ -1,5 +1,6 @@
 """Code checks on a PI decision. Prompts ask for good decisions; these make bad ones impossible."""
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,7 +17,9 @@ from principal_investigator.contract import (
 )
 from principal_investigator.workspace import Workspace
 
-MAX_FINDINGS = 6
+MAX_FINDINGS = 12
+#: B17: the PI arbitrates the review; its own findings are only what the reviewer cannot see.
+MAX_OWN_FINDINGS = 2
 MAX_HANDOFF = 8
 MAX_LINE = 480
 MAX_NOTES = 4
@@ -67,14 +70,16 @@ def _findings(raw: list, req: ConsultationRequest) -> list[Finding]:
     for i, item in enumerate(raw[:MAX_FINDINGS], 1):
         if not isinstance(item, dict):
             raise GuardError("each finding must be an object")
-        artifact_id = item.get("artifact_id")
+        anchor = item.get("anchor") if isinstance(item.get("anchor"), dict) else {}
+        artifact_id = item.get("artifact_id") or anchor.get("artifact_id")
         if artifact_id not in known_artifacts:
             artifact_id = under_review[0] if under_review else None
+        locator = item.get("locator") or anchor.get("locator") or ""
         try:
             findings.append(
                 Finding(
                     finding_id=f"PI-{req.consultation_id[:8]}-{i}",
-                    anchor={"artifact_id": artifact_id, "locator": item.get("locator") or ""},
+                    anchor={"artifact_id": artifact_id, "locator": locator},
                     severity=item.get("severity", "major"),
                     kind=item.get("kind", "fix"),
                     category=item.get("category", "other"),
@@ -115,10 +120,7 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
             raise GuardError("params must map a name to a list of ids, e.g. {'dropped': ['P3']}")
         data["params"] = params
     elif action == "comment":
-        findings = decision_raw.get("findings")
-        if not isinstance(findings, list) or not findings:
-            raise GuardError("comment needs at least one finding")
-        data["findings"] = _findings(findings, req)
+        data["findings"] = await _comment(decision_raw, req, ws)
     elif action == "accept":
         selection = decision_raw.get("selection") or {}
         if allowed.selection_key:
@@ -135,7 +137,7 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
             unknown = [c for c in chosen if known and c not in known]
             if unknown:
                 raise GuardError(f"unknown ids {unknown}; choose from {sorted(known)}")
-            blocked = await ws.blocked(req.situation.stage_key)
+            blocked = await ws.blocking(req.situation.stage_key)
             if blocked is not None:
                 whole, ids = blocked
                 if whole:
@@ -143,10 +145,14 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
                         "the latest review has a blocking finding on the whole artifact; "
                         "send it back or stop instead of accepting"
                     )
-                if refused := [c for c in chosen if c in ids]:
+                risks = _strings(raw.get("handoff"), MAX_HANDOFF)
+                if refused := [c for c in chosen if c in ids and not _named(c, ids[c], risks)]:
+                    named = "; ".join(f"{c}: {', '.join(sorted(ids[c]))}" for c in refused)
                     raise GuardError(
-                        f"{refused} still have blocking review findings; select only ids "
-                        "without one, or send the stage back"
+                        f"{refused} still have blocking review findings ({named}). Select only "
+                        "ids without one; or accept one as a known risk with a handoff line "
+                        "that names the id and its finding id and says how the next stage "
+                        "controls it; or send the stage back"
                     )
             data["selection"] = {allowed.selection_key: chosen}
     elif action == "send_back":
@@ -210,6 +216,44 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
         brief=str(raw.get("brief") or "").strip()[:1500],
         raw=raw,
     )
+
+
+async def _comment(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) -> list[Finding]:
+    """B17: adopt the reviewer's findings by id; own findings only for what serves the charter."""
+    adopt, own = raw.get("adopt") or [], raw.get("findings") or []
+    if not isinstance(adopt, list) or not isinstance(own, list):
+        raise GuardError("`adopt` must be a list of reviewer finding ids, `findings` a list")
+    if not adopt and not own:
+        raise GuardError("comment needs reviewer finding ids in `adopt`, or a finding of your own")
+    if len(own) > MAX_OWN_FINDINGS:
+        raise GuardError(
+            f"at most {MAX_OWN_FINDINGS} findings of your own; adopt the reviewer's by id"
+        )
+    for item in own:
+        if not isinstance(item, dict) or "charter:" not in str(item.get("issue") or ""):
+            raise GuardError(
+                "a finding of your own must cite the charter line it serves "
+                "(charter:<field>[i]) in `issue`; reviewer issues go in `adopt` by id"
+            )
+    reviewer = {f["finding_id"]: f for f in await ws.review_findings(req.situation.stage_key)}
+    adopt = list(dict.fromkeys(str(i) for i in adopt))
+    if unknown := [i for i in adopt if i not in reviewer]:
+        raise GuardError(f"unknown reviewer finding ids {unknown}; choose from {sorted(reviewer)}")
+    copied = [
+        reviewer[i]
+        | {
+            "issue": f"[{i}] {reviewer[i].get('issue') or ''}",
+            "category": reviewer[i].get("category") or "other",
+        }
+        for i in adopt
+    ]
+    return _findings(copied + own, req)
+
+
+def _named(hypothesis: str, finding_ids: set[str], lines: list[str]) -> bool:
+    """B19: a handoff line names the hypothesis and one of its blocking findings."""
+    word = re.compile(rf"\b{re.escape(hypothesis)}\b")
+    return any(word.search(line) and any(f in line for f in finding_ids) for line in lines)
 
 
 async def _approvable(req: ConsultationRequest, ws: Workspace) -> bool:

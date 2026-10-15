@@ -16,7 +16,8 @@ from principal_investigator.workspace import ArtifactError, Workspace
 OPENALEX = "https://api.openalex.org/works"
 HF_DATASETS = "https://huggingface.co/api/datasets"
 #: Kinds whose decision has consequences: the PI must hear the Critic before deciding.
-NEEDS_CRITIC = {"charter", "gate_review", "stage_outcome"}
+#: Consequential decisions. A review gate is arbitration of the engine's own review (B17).
+NEEDS_CRITIC = {"charter", "stage_outcome"}
 #: Decision fields the Critic must have seen exactly; notes and findings may be refined after.
 SUBSTANCE = ("action", "option_id", "selection", "target_stage_key")
 MAX_CRITIC_CALLS = 3

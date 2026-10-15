@@ -8,10 +8,14 @@ Allowed actions are listed in the context. Typical choices:
   (would either outcome teach us something?); risk spread across the portfolio. Usually choose 1-3.
   Do not choose an item only because the engine ranked it first. Explain each chosen and each
   rejected item in `evidence` (ref = the item id).
+  The briefing says which items the latest review blocks. You may accept a blocked item as a
+  known risk when it is worth it: add a `handoff` line that names the item id and its blocking
+  finding id, and says how the next stage must control that risk.
 - `send_back`: run a stage again with your feedback. Target the current stage to refine it, or an
   earlier stage when the problem lives in its output (for example: the experiment plan shows no
   hypothesis is testable with available data, so hypothesis generation must change). Only targets
   in the allowed list are possible. Check the iteration count: a send-back uses one iteration.
+  Sending the current stage back to itself runs it again from the start; it is allowed once.
 - `stop`: end the run now because a kill criterion is met or nothing left is worth the cost. A
   stop is a legitimate, honest outcome; explain it in terms of the charter.
 

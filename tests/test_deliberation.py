@@ -274,6 +274,24 @@ async def test_accept_refuses_hypotheses_with_blocking_findings():
     assert "['H1'] still have blocking review findings" in lead.observations()[1]
 
 
+async def test_accept_takes_a_blocked_hypothesis_named_as_a_known_risk():
+    content, review = blob(HYPOTHESES), blob(ON_H1)
+    req = request(
+        artifacts=[
+            ref("a1", content, schema="i2h.hypotheses/v1", role="primary"),
+            ref("r1", review, schema="review.findings/v1", role="review"),
+        ]
+    )
+    risk = "Known risk H1 (F2 leakage): the plan must split by source before tuning."
+    pi = [
+        call("consult_critic", proposal=ACCEPT_13),
+        call("decide", **(ACCEPT_13 | {"handoff": [risk]})),
+    ]
+    result, _, _ = await _run(req, pi, [UPHOLD], {"a1": content, "r1": review})
+    assert result.decision.selection == {"hypothesis_ids": ["H1", "H3"]}
+    assert result.handoff == [risk]
+
+
 async def test_approve_after_passed_review_has_no_escalation_and_no_handoff():
     req, artifacts = _review_request(FINDINGS_PASSED)
     approve = decision("approve")
@@ -287,26 +305,45 @@ async def test_approve_after_passed_review_has_no_escalation_and_no_handoff():
     assert result.escalate is None and result.handoff == []
 
 
+OWN_FINDING = {
+    "locator": "hypothesis:H2/statement",
+    "artifact_id": "not-known",
+    "severity": "major",
+    "category": "baseline",
+    "issue": "No baseline for charter:success_criteria[0]",
+    "suggestion": "Name BM25",
+}
+
+
 async def test_comment_findings_are_anchored_and_authored_as_the_research_lead():
     req, artifacts = _review_request(FINDINGS_PASSED)
-    comment = decision(
-        "comment",
-        findings=[
-            {
-                "locator": "hypothesis:H2/statement",
-                "artifact_id": "not-known",
-                "severity": "major",
-                "category": "baseline",
-                "issue": "No baseline",
-                "suggestion": "Name BM25",
-            }
-        ],
-    )
-    pi = [call("consult_critic", proposal=comment), call("decide", **comment)]
-    result, _, _ = await _run(req, pi, [UPHOLD], artifacts)
+    comment = decision("comment", findings=[OWN_FINDING])
+    result, _, _ = await _run(req, [call("decide", **comment)], [], artifacts)
     finding = result.decision.findings[0]
     assert finding.author == "researcher"
     assert finding.anchor.artifact_id == "a1"
+
+
+async def test_comment_adopts_reviewer_findings_by_id_and_needs_no_critic():
+    req, artifacts = _review_request(ON_H1)
+    comment = decision("comment", adopt=["F2"])
+    result, _, _ = await _run(req, [call("decide", **comment)], [], artifacts)
+    (finding,) = result.decision.findings
+    assert finding.issue == "[F2] Leakage"
+    assert finding.anchor.locator == "hypothesis:H1/statement"
+    assert finding.severity == "blocking" and finding.author == "researcher"
+
+
+async def test_comment_refuses_unknown_ids_and_own_findings_that_restate_the_review():
+    req, artifacts = _review_request(ON_H1)
+    unknown = decision("comment", adopt=["F9"])
+    restated = decision("comment", findings=[OWN_FINDING | {"issue": "Leakage in H1"}])
+    good = decision("comment", adopt=["F2"])
+    pi = [call("decide", **unknown), call("decide", **restated), call("decide", **good)]
+    result, lead, _ = await _run(req, pi, [], artifacts)
+    assert "unknown reviewer finding ids ['F9']" in lead.observations()[0]
+    assert "must cite the charter line" in lead.observations()[1]
+    assert result.decision.findings[0].issue == "[F2] Leakage"
 
 
 async def test_small_gate_needs_no_critic_but_a_valid_option():

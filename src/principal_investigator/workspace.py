@@ -116,8 +116,14 @@ class Workspace:
         doc = await self._latest_review(stage_key)
         return doc.get("passed") if isinstance(doc, dict) else None
 
-    async def blocked(self, stage_key: str | None) -> tuple[bool, set[str]] | None:
-        """Blocking findings of the latest review: (whole artifact blocked, blocked ids).
+    async def review_findings(self, stage_key: str | None) -> list[dict]:
+        """Findings of the latest review of the current attempt; empty without a review."""
+        doc = await self._latest_review(stage_key)
+        findings = doc.get("findings") if isinstance(doc, dict) else None
+        return [f for f in findings or [] if isinstance(f, dict) and f.get("finding_id")]
+
+    async def blocking(self, stage_key: str | None) -> tuple[bool, dict[str, set[str]]] | None:
+        """Blocking findings of the latest review: (whole artifact blocked, id -> finding ids).
 
         A blocking finding anchored to ``hypothesis:<id>`` blocks that id only; any other
         blocking finding blocks the whole artifact. ``None`` when there is no review.
@@ -125,16 +131,22 @@ class Workspace:
         doc = await self._latest_review(stage_key)
         if not isinstance(doc, dict):
             return None
-        whole, ids = False, set()
+        whole, ids = False, {}
         for finding in doc.get("findings") or []:
             if not isinstance(finding, dict) or finding.get("severity") != "blocking":
                 continue
             locator = str((finding.get("anchor") or {}).get("locator") or "")
             if locator.startswith("hypothesis:"):
-                ids.add(locator.removeprefix("hypothesis:").split("/", 1)[0])
+                hypothesis = locator.removeprefix("hypothesis:").split("/", 1)[0]
+                ids.setdefault(hypothesis, set()).add(str(finding.get("finding_id") or ""))
             else:
                 whole = True
         return whole, ids
+
+    async def blocked(self, stage_key: str | None) -> tuple[bool, set[str]] | None:
+        """Like `blocking`, without the finding ids."""
+        found = await self.blocking(stage_key)
+        return None if found is None else (found[0], set(found[1]))
 
     async def review_status(self, stage_key: str | None) -> str | None:
         """One line on what the latest review blocks, for the briefing; None without a review."""
