@@ -322,6 +322,7 @@ REPORT_PARAMETERS = _schema(
                     "locator": {"type": "string"},
                     "point": {"type": "string"},
                     "suggestion": {"type": "string"},
+                    "fix_class": {"type": "string", "enum": ["fix", "needs_evidence", "later"]},
                 },
             },
         },

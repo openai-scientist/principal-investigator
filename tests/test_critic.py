@@ -143,6 +143,21 @@ async def test_stage_review_returns_a_guarded_report_from_the_critic_model():
     assert "Your authority" not in start and "Allowed actions" not in start
 
 
+async def test_the_report_carries_fix_class_per_point():
+    req, artifacts = _stage_review()
+    points = [SERIOUS | {"fix_class": "needs_evidence"}, MINOR]
+    result, _, _ = await _review(req, [call("report", **report("serious", points))], artifacts)
+    assert [p.fix_class for p in result.report.points] == ["needs_evidence", "fix"]
+
+
+async def test_an_unknown_fix_class_returns_to_the_critic_as_a_tool_error():
+    req, artifacts = _stage_review()
+    bad = report("serious", [SERIOUS | {"fix_class": "never"}])
+    replies = [call("report", **bad), call("report", **report())]
+    _, critic, _ = await _review(req, replies, artifacts)
+    assert "fix_class" in critic.observations()[0]
+
+
 async def test_the_critic_has_read_tools_only():
     req, artifacts = _stage_review(obligations=[])
     replies = [

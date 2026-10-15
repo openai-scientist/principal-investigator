@@ -167,6 +167,8 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
 
     _check_critic_response(req, critic_response)
     if escalate is None:
+        await _check_actionable(req, ws, action, critic_response)
+    if escalate is None:
         _check_directives(req, directives_applied)
     await _check_subset(req, ws, action, options)
     if req.kind == "close":
@@ -209,6 +211,33 @@ def _check_critic_response(req: ConsultationRequest, given: list[CriticResponse]
             "argument of decide next to `decision`: {point_id, response: accepted|rejected, "
             "reason}. If you reject one, the researcher decides"
         )
+
+
+async def _check_actionable(
+    req: ConsultationRequest, ws: Workspace, action: str, given: list[CriticResponse]
+) -> None:
+    """G-actionable (R8): send_back, rerun or stop need a problem that revising can fix."""
+    if req.kind != "stage_outcome" or action not in ("send_back", "rerun", "stop"):
+        return
+    points = req.critique.points if req.critique else []
+    accepted = {r.point_id for r in given if r.response == "accepted"}
+    if any(
+        p.severity == "serious"
+        and (p.lens == "integrity" or (p.fix_class == "fix" and p.point_id in accepted))
+        for p in points
+    ):
+        return
+    try:
+        findings = await ws.review_findings(req.situation.stage_key)
+    except ArtifactError:
+        return  # nothing can be verified; the agent already saw the read error
+    # An engine finding without a kind is a fix (older engines).
+    if any(f.get("severity") == "blocking" and f.get("kind", "fix") == "fix" for f in findings):
+        return
+    raise GuardError(
+        "the open problems cannot be fixed by revising this stage; accept (a subset if needed) "
+        "and carry them in `handoff` as known risks, or set `escalate` for the researcher"
+    )
 
 
 def _directives(req: ConsultationRequest) -> list[str]:
@@ -416,6 +445,7 @@ async def check_report(
                 ref=earlier.ref,
                 locator=earlier.locator,
                 point=f"[maintains {r.point_id}] {r.reason}",
+                fix_class=earlier.fix_class,
             )
         )
 

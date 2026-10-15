@@ -159,6 +159,7 @@ class CriticPoint(Wire):
     locator: str | None = None
     point: str
     suggestion: str | None = None
+    fix_class: Literal["fix", "needs_evidence", "later"] = "fix"
 
 
 class ObligationCheck(Wire):

@@ -34,7 +34,15 @@ one entry in `resolutions` for each (`point_id`, `status` `resolved` or `maintai
 Raise a new serious point only for `integrity` or `directive` problems. Report any other new
 problem as `minor`; code downgrades new `charter` and `risk` points to minor anyway.
 
+Give every point a `fix_class`, which says who can resolve it:
+- `fix`: a revision of this stage can resolve it. Example: a hypothesis does not name what the
+  charter requires.
+- `needs_evidence`: it needs an external lookup, verification, data access or evidence that
+  revising cannot give. Example: a dataset license or provenance that tooling cannot verify.
+- `later`: the next stage owns it. Example: seeds or hyperparameters that are frozen at
+  preregistration or execution.
+
 Finish by calling `report` with `verdict`, `summary` (one or two sentences), `points` (at most 8;
-each has severity, lens, ref, point, and optionally locator and suggestion) and `obligations` (and `resolutions` in a repeat review).
+each has severity, lens, ref, point, fix_class, and optionally locator and suggestion) and `obligations` (and `resolutions` in a repeat review).
 `verdict` is `serious` if any point is serious, `concerns` if all points are minor, `sound` if
 there are no points. Code checks the report; if it is rejected, read why and call `report` again.

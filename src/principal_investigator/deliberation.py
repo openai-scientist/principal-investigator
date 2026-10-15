@@ -169,7 +169,7 @@ def _prior_lines(report: CriticReport) -> list[str]:
 def _critic_lines(report: CriticReport) -> list[str]:
     out = [f"Critic report (independent, own model): {report.verdict}. {report.summary}"]
     out += [
-        f"- {p.point_id} [{p.severity}/{p.lens} {p.ref}]"
+        f"- {p.point_id} [{p.severity}/{p.lens} {p.ref}] (fix_class: {p.fix_class})"
         + (f" @ {p.locator}" if p.locator else "")
         + f": {p.point}"
         + (f" Suggestion: {p.suggestion}" if p.suggestion else "")

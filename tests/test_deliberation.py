@@ -143,7 +143,11 @@ async def test_unreadable_artifact_is_an_observation_not_a_crash():
     req = request(artifacts=[ref("a1", b"other", schema="i2h.hypotheses/v1", role="primary")])
     pi = [
         call("read_artifact", artifact_id="a1"),
-        call("decide", **decision("stop", note="Inputs unreadable")),
+        call(
+            "decide",
+            **decision("stop", note="Inputs unreadable")
+            | {"escalate": {"reason_code": "cannot_decide", "message": "Inputs unreadable."}},
+        ),
     ]
     result, lead = await _run(req, pi, {"a1": blob(HYPOTHESES)})
     assert "sha256" in lead.observations()[0]
@@ -239,6 +243,116 @@ async def test_a_minor_only_report_needs_no_response():
 async def test_briefing_says_when_the_critic_report_is_unavailable():
     req, _ = _hypothesis_request()
     assert "Critic report unavailable" in briefing(req, "(no artifacts)")
+
+
+# -- G-actionable (R8) ---------------------------------------------------------------------
+
+
+def _point(
+    point_id, fix_class, severity="serious", lens="charter", ref="charter:success_criteria[0]"
+):
+    return {
+        "point_id": point_id,
+        "severity": severity,
+        "lens": lens,
+        "ref": ref,
+        "point": "A problem.",
+        "fix_class": fix_class,
+    }
+
+
+def _critique(*points):
+    return CRITIQUE | {"points": list(points)}
+
+
+def _answer(base, *ids, response="accepted"):
+    return base | {
+        "critic_response": [
+            {"point_id": i, "response": response, "reason": "Checked."} for i in ids
+        ]
+    }
+
+
+SUBSET = {"options_considered": [{"action": "accept", "summary": "All", "why_not": "Not enough"}]}
+STOP = decision("stop", note="Cannot proceed.") | SUBSET
+SEND_BACK = decision("send_back", target_stage_key="hypothesis", note="Name the baseline.") | SUBSET
+NOT_FIXABLE = "cannot be fixed by revising this stage"
+
+
+@pytest.mark.parametrize("action", [STOP, SEND_BACK])
+async def test_leaving_the_stage_is_refused_when_no_open_problem_is_fixable(action):
+    critique = _critique(_point("C1", "needs_evidence"), _point("C2", "later"))
+    req, artifacts = _hypothesis_request(critique=critique)
+    final = ACCEPT_13 | {
+        "critic_response": [
+            {"point_id": i, "response": "accepted", "reason": "Verified."} for i in ("C1", "C2")
+        ]
+    }
+    result, lead = await _run(
+        req, [call("decide", **_answer(action, "C1", "C2")), call("decide", **final)], artifacts
+    )
+    assert NOT_FIXABLE in lead.observations()[0]
+    assert result.decision.action == "accept"
+
+
+async def test_send_back_is_allowed_with_an_accepted_fix_point():
+    req, artifacts = _hypothesis_request(critique=_critique(_point("C1", "fix")))
+    result, _ = await _run(req, [call("decide", **_answer(SEND_BACK, "C1"))], artifacts)
+    assert result.decision.action == "send_back"
+
+
+async def test_a_rejected_fix_point_does_not_make_the_stage_fixable():
+    req, artifacts = _hypothesis_request(critique=_critique(_point("C1", "fix")))
+    rejected = _answer(STOP, "C1", response="rejected")
+    final = _answer(ACCEPT_13, "C1", response="rejected")
+    _, lead = await _run(req, [call("decide", **rejected), call("decide", **final)], artifacts)
+    assert NOT_FIXABLE in lead.observations()[0]
+
+
+async def test_a_serious_integrity_point_makes_the_stage_fixable():
+    point = _point("C1", "later", lens="integrity", ref="integrity:spin")
+    req, artifacts = _hypothesis_request(critique=_critique(point))
+    result, _ = await _run(
+        req, [call("decide", **_answer(STOP, "C1", response="rejected"))], artifacts
+    )
+    assert result.decision.action == "stop"
+
+
+async def test_a_blocking_review_finding_of_kind_fix_makes_the_stage_fixable():
+    findings = ON_H1 | {"findings": [ON_H1["findings"][0] | {"kind": "fix"}]}
+    req, artifacts = _blocked_request(findings)
+    argued = SEND_BACK | {
+        "options_considered": [{"action": "accept", "summary": "H2", "why_not": "Too thin"}]
+    }
+    result, _ = await _run(req, [call("decide", **argued)], artifacts)
+    assert result.decision.action == "send_back"
+
+
+async def test_a_blocking_finding_of_kind_needs_evidence_does_not():
+    findings = ON_H1 | {"findings": [ON_H1["findings"][0] | {"kind": "needs_evidence"}]}
+    req, artifacts = _blocked_request(findings)
+    argued = STOP | {
+        "options_considered": [{"action": "accept", "summary": "H2", "why_not": "Too thin"}]
+    }
+    final = decision("accept", selection={"hypothesis_ids": ["H2", "H3"]})
+    _, lead = await _run(req, [call("decide", **argued), call("decide", **final)], artifacts)
+    assert NOT_FIXABLE in lead.observations()[0]
+
+
+async def test_escalation_always_allows_leaving_the_stage():
+    req, artifacts = _hypothesis_request(critique=_critique(_point("C1", "needs_evidence")))
+    escalated = _answer(STOP, "C1") | {
+        "escalate": {"reason_code": "cannot_decide", "message": "A license is unverified."}
+    }
+    result, _ = await _run(req, [call("decide", **escalated)], artifacts)
+    assert result.decision.action == "stop" and result.escalate is not None
+
+
+async def test_the_briefing_shows_each_points_fix_class():
+    req, _ = _hypothesis_request(critique=_critique(_point("C1", "needs_evidence")))
+    assert "C1 [serious/charter charter:success_criteria[0]] (fix_class: needs_evidence)" in (
+        briefing(req, "(no artifacts)")
+    )
 
 
 # -- G-subset ------------------------------------------------------------------------------

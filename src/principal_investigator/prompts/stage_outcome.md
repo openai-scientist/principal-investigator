@@ -31,6 +31,11 @@ reject a serious point, the researcher decides instead of you, so reject only wi
 points need no answer. Accepted risks (obligations) targeted at this stage are in the context; the
 Critic checked each.
 
+Only a problem that revising this stage can fix justifies `send_back`, `rerun` or `stop`: a serious
+Critic point with fix_class `fix` that you accept, a blocking engine finding of kind `fix`, or an
+integrity point. Points that need evidence or belong to a later stage travel in `handoff` as known
+risks, or you set `escalate`.
+
 Researcher directives. Every directive listed in the context goes in `directives_applied` with
 `how` this decision follows it.
 
