@@ -20,7 +20,8 @@ from principal_investigator.workspace import Workspace
 MAX_FINDINGS = 12
 #: B17: the PI arbitrates the review; its own findings are only what the reviewer cannot see.
 MAX_OWN_FINDINGS = 2
-MAX_HANDOFF = 8
+#: The Platform passes at most five hand-off lines to the next stage.
+MAX_HANDOFF = 5
 MAX_LINE = 480
 MAX_NOTES = 4
 
@@ -130,10 +131,7 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
             if not isinstance(chosen, list) or not chosen:
                 raise GuardError(f"accept needs a nonempty selection[{allowed.selection_key!r}]")
             chosen = list(dict.fromkeys(str(c) for c in chosen))
-            known: set[str] = set()
-            for ref in req.artifacts:
-                if ref.role == "primary" and ref.stage_key == req.situation.stage_key:
-                    known.update(await ws.ids_of(ref.artifact_id))
+            known = set(await ws.current_ids(req.situation.stage_key))
             unknown = [c for c in chosen if known and c not in known]
             if unknown:
                 raise GuardError(f"unknown ids {unknown}; choose from {sorted(known)}")
@@ -196,7 +194,10 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
 
     rationale = str(raw.get("rationale") or "").strip()
     if not rationale:
-        raise GuardError("rationale is required")
+        raise GuardError(
+            "`rationale` is required: an argument of decide next to `decision`. "
+            f"You passed: {', '.join(sorted(raw))}"
+        )
     handoff = (
         _strings(raw.get("handoff"), MAX_HANDOFF)
         if action in ("accept", "send_back", "charter")
@@ -225,6 +226,8 @@ async def _comment(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace)
         raise GuardError("`adopt` must be a list of reviewer finding ids, `findings` a list")
     if not adopt and not own:
         raise GuardError("comment needs reviewer finding ids in `adopt`, or a finding of your own")
+    if len(adopt) + len(own) > MAX_FINDINGS:
+        raise GuardError(f"at most {MAX_FINDINGS} findings; adopt the ones that matter most")
     if len(own) > MAX_OWN_FINDINGS:
         raise GuardError(
             f"at most {MAX_OWN_FINDINGS} findings of your own; adopt the reviewer's by id"
@@ -252,8 +255,12 @@ async def _comment(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace)
 
 def _named(hypothesis: str, finding_ids: set[str], lines: list[str]) -> bool:
     """B19: a handoff line names the hypothesis and one of its blocking findings."""
-    word = re.compile(rf"\b{re.escape(hypothesis)}\b")
-    return any(word.search(line) and any(f in line for f in finding_ids) for line in lines)
+
+    def token(value: str):
+        return re.compile(rf"(?<![\w-]){re.escape(value)}(?![\w-])")
+
+    names, findings = token(hypothesis), [token(f) for f in finding_ids]
+    return any(names.search(line) and any(f.search(line) for f in findings) for line in lines)
 
 
 async def _approvable(req: ConsultationRequest, ws: Workspace) -> bool:
@@ -270,8 +277,4 @@ async def _approvable(req: ConsultationRequest, ws: Workspace) -> bool:
         return False
     if not ids:
         return True
-    known: set[str] = set()
-    for ref in req.artifacts:
-        if ref.role == "primary" and ref.stage_key == req.situation.stage_key:
-            known.update(await ws.ids_of(ref.artifact_id))
-    return bool(known - ids)
+    return bool(set(await ws.current_ids(req.situation.stage_key)) - ids)

@@ -15,7 +15,7 @@ Allowed actions are listed in the context. Typical choices:
   earlier stage when the problem lives in its output (for example: the experiment plan shows no
   hypothesis is testable with available data, so hypothesis generation must change). Only targets
   in the allowed list are possible. Check the iteration count: a send-back uses one iteration.
-  Sending the current stage back to itself runs it again from the start; it is allowed once.
+  Sending the current stage back to itself runs it again from the start.
 - `stop`: end the run now because a kill criterion is met or nothing left is worth the cost. A
   stop is a legitimate, honest outcome; explain it in terms of the charter.
 
@@ -27,6 +27,6 @@ Decision formats (the `decision` argument of `decide`):
 {"action": "send_back", "target_stage_key": "<allowed target>", "note": "<what must change, concretely, and why>"}
 {"action": "stop", "note": "<why, in terms of the charter>"}
 
-For `accept` and `send_back`, write `handoff`: 3-6 short instructions for the team that works next.
+For `accept` and `send_back`, write `handoff`: 3-5 short instructions for the team that works next.
 They are passed to that engine verbatim. Make them concrete (which hypotheses matter most, what to
 prioritise, which risks to control, what not to repeat).

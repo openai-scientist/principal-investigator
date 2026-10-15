@@ -112,6 +112,11 @@ class Workspace:
             return [str(h.get("id")) for h in doc["hypotheses"] if isinstance(h, dict)]
         return []
 
+    async def current_ids(self, stage_key: str | None) -> list[str]:
+        """Item ids of the latest primary artifact of the current attempt, in order."""
+        latest = self._latest([r for r in self.refs.values() if r.role == "primary"], stage_key)
+        return list(dict.fromkeys(await self.ids_of(latest.artifact_id))) if latest else []
+
     async def latest_review_passed(self, stage_key: str | None) -> bool | None:
         doc = await self._latest_review(stage_key)
         return doc.get("passed") if isinstance(doc, dict) else None
@@ -138,7 +143,9 @@ class Workspace:
             locator = str((finding.get("anchor") or {}).get("locator") or "")
             if locator.startswith("hypothesis:"):
                 hypothesis = locator.removeprefix("hypothesis:").split("/", 1)[0]
-                ids.setdefault(hypothesis, set()).add(str(finding.get("finding_id") or ""))
+                ids.setdefault(hypothesis, set())
+                if finding.get("finding_id"):
+                    ids[hypothesis].add(str(finding["finding_id"]))
             else:
                 whole = True
         return whole, ids
@@ -149,17 +156,18 @@ class Workspace:
         return None if found is None else (found[0], set(found[1]))
 
     async def review_status(self, stage_key: str | None) -> str | None:
-        """One line on what the latest review blocks, for the briefing; None without a review."""
-        blocked = await self.blocked(stage_key)
-        if blocked is None:
+        """One line on what the latest review blocks, for the briefing; None without a review
+        or when an artifact cannot be read (the agent can still read them itself)."""
+        try:
+            blocked = await self.blocked(stage_key)
+            if blocked is None:
+                return None
+            whole, ids = blocked
+            if whole:
+                return "Latest independent review: a blocking finding on the whole artifact."
+            known = await self.current_ids(stage_key)
+        except ArtifactError:
             return None
-        whole, ids = blocked
-        if whole:
-            return "Latest independent review: a blocking finding on the whole artifact."
-        known: list[str] = []
-        for ref in self.refs.values():
-            if ref.role == "primary" and ref.stage_key in (None, stage_key):
-                known += await self.ids_of(ref.artifact_id)
         if not ids:
             return "Latest independent review: no blocking finding."
         clean = [i for i in known if i not in ids]
@@ -169,20 +177,24 @@ class Workspace:
         )
 
     async def _latest_review(self, stage_key: str | None):
-        reviews = [
-            r
-            for r in self.refs.values()
-            if r.role == "review"
-            and r.schema_id.startswith("review.findings/")
-            and (stage_key is None or r.stage_key in (None, stage_key))
-        ]
-        # Versions restart with each attempt: an earlier attempt's v4 is older than this one's v2.
-        current = [r for r in reviews if r.stage_run_id == self.current_stage_run]
-        reviews = current or reviews
-        if not reviews:
-            return None
-        latest = max(reviews, key=lambda r: r.version)
-        return await self.json(latest.artifact_id)
+        latest = self._latest(
+            [
+                r
+                for r in self.refs.values()
+                if r.role == "review" and r.schema_id.startswith("review.findings/")
+            ],
+            stage_key,
+        )
+        return await self.json(latest.artifact_id) if latest else None
+
+    def _latest(self, refs: list[ConsultArtifact], stage_key: str | None):
+        """The highest version of the current attempt. Versions restart with each attempt, so an
+        earlier attempt's v4 is older than this one's v2; refs without an attempt id are
+        compared by version (older Platforms)."""
+        refs = [r for r in refs if stage_key is None or r.stage_key in (None, stage_key)]
+        if self.current_stage_run and any(r.stage_run_id for r in refs):
+            refs = [r for r in refs if r.stage_run_id == self.current_stage_run]
+        return max(refs, key=lambda r: r.version) if refs else None
 
 
 def _page(body: str, offset: int) -> str:

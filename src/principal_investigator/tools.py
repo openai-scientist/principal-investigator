@@ -194,6 +194,21 @@ async def _get_json(s: Session, url: str, params: dict[str, Any]) -> Any:
 
 # -- PI-only tools -----------------------------------------------------------------------
 
+#: Arguments of `decide` besides `decision`.
+TOP_LEVEL = (
+    "rationale",
+    "confidence",
+    "options_considered",
+    "evidence",
+    "assumptions",
+    "would_change_my_mind",
+    "escalate",
+    "handoff",
+    "brief",
+    "critique_response",
+    "notebook",
+)
+
 DECIDE_PARAMETERS = _schema(
     {
         "decision": {
@@ -264,6 +279,10 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
         decision = args["decision"] = _object(args.get("decision"))
         if not isinstance(decision, dict):
             raise ToolError("`decision` must be an object with an `action`")
+        # Seen live: models nest the other arguments inside `decision`; lift them out.
+        for key in TOP_LEVEL:
+            if key in decision and key not in args:
+                args[key] = _object(decision.pop(key))
         if s.req.kind in NEEDS_CRITIC:
             if not s.critiques:
                 raise ToolError("consult the Critic with your draft decision before deciding")
@@ -278,8 +297,9 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
             majors = [p for p in last["verdict"].get("points", []) if p.get("severity") == "major"]
             if majors and not args.get("critique_response"):
                 raise ToolError(
-                    "the Critic raised major points; answer each in `critique_response` "
-                    "(accepted or rejected, with a reason)"
+                    "the Critic raised major points; answer each in `critique_response`, an "
+                    "argument of decide next to `decision` (accepted or rejected, with a "
+                    f"reason). You passed: {', '.join(sorted(args)) or 'nothing'}"
                 )
         try:
             draft: Draft = await check(args, s.req, s.ws)

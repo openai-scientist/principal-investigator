@@ -465,3 +465,54 @@ async def test_the_current_attempts_review_wins_over_an_earlier_higher_version()
     status = await ws.review_status("hypothesis")
     assert status.startswith("Latest independent review: blocking findings on H1; without one:")
     assert "H1," not in status.split("without one:")[1]
+
+
+async def test_decide_lifts_arguments_nested_in_the_decision():
+    req, artifacts = _review_request(FINDINGS_PASSED)
+    flat = decision("approve")
+    nested = {"decision": flat["decision"] | {k: v for k, v in flat.items() if k != "decision"}}
+    result, _, _ = await _run(req, [call("decide", **nested)], [], artifacts)
+    assert result.decision.action == "approve"
+    assert result.rationale == flat["rationale"]
+
+
+async def test_no_fallback_to_an_earlier_attempts_review():
+    content, old = blob(HYPOTHESES), blob(FINDINGS_BLOCKED)
+    req = request(
+        artifacts=[
+            ref("a1", content, schema="i2h.hypotheses/v1", role="primary") | {"stage_run_id": "s2"},
+            ref("a0", content, schema="i2h.hypotheses/v1", role="primary")
+            | {"stage_run_id": "s1", "version": 3},
+            ref("r0", old, schema="review.findings/v1", role="review")
+            | {"version": 4, "stage_run_id": "s1"},
+        ]
+    )
+    ws = Workspace(
+        req.artifacts,
+        KEY,
+        current_stage_run="s2",
+        transport=FakePlatform({"a1": content, "a0": content, "r0": old}).transport,
+    )
+    assert await ws.blocked("hypothesis") is None
+    assert await ws.current_ids("hypothesis") == ["H1", "H2", "H3"]
+
+
+async def test_a_risk_line_must_name_the_exact_finding_and_hypothesis():
+    from principal_investigator.guards import _named
+
+    assert _named("H1", {"F2"}, ["H1 (F2): split by source"])
+    assert not _named("H1", {"F2"}, ["H1 (F21): split by source"])
+    assert not _named("H1", {"F2"}, ["H10 (F2): split by source"])
+    assert not _named("H1", {"F2"}, ["H1: split by source"])
+
+
+async def test_briefing_survives_an_unreadable_review():
+    content = blob(HYPOTHESES)
+    req = request(
+        artifacts=[
+            ref("a1", content, schema="i2h.hypotheses/v1", role="primary"),
+            ref("r1", b"{}", schema="review.findings/v1", role="review"),
+        ]
+    )
+    ws = Workspace(req.artifacts, KEY, transport=FakePlatform({"a1": content}).transport)
+    assert await ws.review_status("hypothesis") is None
