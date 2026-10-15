@@ -516,3 +516,17 @@ async def test_briefing_survives_an_unreadable_review():
     )
     ws = Workspace(req.artifacts, KEY, transport=FakePlatform({"a1": content}).transport)
     assert await ws.review_status("hypothesis") is None
+
+
+async def test_own_finding_may_not_sit_on_an_adopted_findings_anchor():
+    req, artifacts = _review_request(ON_H1)
+    same = decision(
+        "comment",
+        adopt=["F2"],
+        findings=[OWN_FINDING | {"locator": "hypothesis:H1/statement"}],
+    )
+    good = decision("comment", adopt=["F2"], findings=[OWN_FINDING])
+    pi = [call("decide", **same), call("decide", **good)]
+    result, lead, _ = await _run(req, pi, [], artifacts)
+    assert "sit where an adopted reviewer finding already is" in lead.observations()[0]
+    assert len(result.decision.findings) == 2

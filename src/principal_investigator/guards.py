@@ -242,6 +242,13 @@ async def _comment(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace)
     adopt = list(dict.fromkeys(str(i) for i in adopt))
     if unknown := [i for i in adopt if i not in reviewer]:
         raise GuardError(f"unknown reviewer finding ids {unknown}; choose from {sorted(reviewer)}")
+    taken = {str((reviewer[i].get("anchor") or {}).get("locator") or "") for i in adopt}
+    if repeated := [o.get("locator") for o in own if o.get("locator") in taken]:
+        raise GuardError(
+            f"your own findings at {repeated} sit where an adopted reviewer finding already is; "
+            "the adopted finding carries the request, so drop yours or anchor it to what only "
+            "the charter shows"
+        )
     copied = [
         reviewer[i]
         | {
