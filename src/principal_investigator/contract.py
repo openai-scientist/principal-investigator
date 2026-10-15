@@ -104,6 +104,7 @@ class ConsultArtifact(Wire):
     primary: bool = False
     role: Literal["primary", "review", "recommendation", "input", "history", "other"]
     stage_key: str | None = None
+    stage_run_id: str | None = None
     size_bytes: int | None = None
 
 
@@ -196,6 +197,7 @@ class PIDecision(Wire):
     selection: dict[str, list[str]] = Field(default_factory=dict)
     target_stage_key: str | None = None
     charter: Charter | None = None
+    params: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class ConsideredOption(Wire):

@@ -24,8 +24,11 @@ class Workspace:
         service_key: str,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        current_stage_run: str | None = None,
     ):
         self.refs = {r.artifact_id: r for r in refs}
+        #: The stage run the consultation is about; artifacts of other runs are history.
+        self.current_stage_run = current_stage_run
         self.service_key = service_key
         self.transport = transport
         self._cache: dict[str, str] = {}
@@ -37,9 +40,16 @@ class Workspace:
         lines = []
         for r in self.refs.values():
             size = f", {r.size_bytes} bytes" if r.size_bytes is not None else ""
+            attempt = ""
+            if self.current_stage_run and r.stage_run_id:
+                attempt = (
+                    ", current attempt"
+                    if r.stage_run_id == self.current_stage_run
+                    else ", earlier attempt"
+                )
             lines.append(
                 f"- {r.artifact_id}: {r.schema_id} v{r.version}, role={r.role}, "
-                f"stage={r.stage_key or '-'}{size}"
+                f"stage={r.stage_key or '-'}{attempt}{size}"
             )
         return "\n".join(lines)
 

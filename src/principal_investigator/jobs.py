@@ -63,7 +63,12 @@ class Jobs:
 
     async def _run(self, req: ConsultationRequest) -> None:
         meter = Meter()
-        ws = Workspace(req.artifacts, self.settings.service_key, transport=self.transport)
+        ws = Workspace(
+            req.artifacts,
+            self.settings.service_key,
+            transport=self.transport,
+            current_stage_run=req.situation.stage_run_id,
+        )
         session = Session(req=req, ws=ws, meter=meter, transport=self.web_transport)
         try:
             timeout = self.settings.llm_timeout_seconds

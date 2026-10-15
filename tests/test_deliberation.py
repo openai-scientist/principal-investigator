@@ -371,3 +371,28 @@ async def test_nested_objects_passed_as_json_strings_are_accepted():
     pi = [call("consult_critic", proposal=json.dumps(ACCEPT_13)), call("decide", **as_text)]
     result, _, _ = await _run(req, pi, [UPHOLD], artifacts)
     assert result.decision.selection == {"hypothesis_ids": ["H1", "H3"]}
+
+
+async def test_a_bare_draft_for_the_critic_is_wrapped():
+    req, artifacts = _hypothesis_request()
+    pi = [
+        call("consult_critic", proposal=ACCEPT_13["decision"]),
+        call("decide", **ACCEPT_13),
+    ]
+    result, _, _ = await _run(req, pi, [UPHOLD], artifacts)
+    assert result.status == "decided"
+
+
+async def test_catalogue_marks_the_current_attempt():
+    content = blob(HYPOTHESES)
+    current = ref("a1", content, schema="i2h.hypotheses/v1", role="primary") | {
+        "stage_run_id": "s2"
+    }
+    earlier = ref("a0", content, schema="i2h.hypotheses/v1", role="primary") | {
+        "stage_run_id": "s1"
+    }
+    req = request(artifacts=[current, earlier])
+    ws = Workspace(req.artifacts, KEY, current_stage_run="s2")
+    catalog = ws.catalog()
+    assert "a1: i2h.hypotheses/v1 v1, role=primary, stage=hypothesis, current attempt" in catalog
+    assert "a0: i2h.hypotheses/v1 v1, role=primary, stage=hypothesis, earlier attempt" in catalog

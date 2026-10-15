@@ -104,6 +104,16 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
         if option not in allowed.option_ids:
             raise GuardError(f"option_id must be one of {allowed.option_ids}")
         data["option_id"] = option
+        params = decision_raw.get("params") or {}
+        if not isinstance(params, dict) or not all(
+            isinstance(k, str)
+            and isinstance(v, list)
+            and len(v) <= 100
+            and all(isinstance(i, str) and i for i in v)
+            for k, v in params.items()
+        ):
+            raise GuardError("params must map a name to a list of ids, e.g. {'dropped': ['P3']}")
+        data["params"] = params
     elif action == "comment":
         findings = decision_raw.get("findings")
         if not isinstance(findings, list) or not findings:

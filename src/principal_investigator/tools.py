@@ -243,6 +243,9 @@ def pi_tools(s: Session, outcome: Outcome) -> list[Tool]:
     async def consult_critic(args: dict) -> str:
         proposal = args["proposal"] = _object(args.get("proposal"))
         if isinstance(proposal, dict):
+            if "decision" not in proposal and "action" in proposal:
+                # A bare decision: wrap it so the Critic sees the usual shape.
+                proposal = args["proposal"] = {"decision": proposal}
             proposal["decision"] = _object(proposal.get("decision"))
         if not isinstance(proposal, dict) or not isinstance(proposal.get("decision"), dict):
             raise ToolError("proposal must be an object with a `decision` and your `rationale`")
