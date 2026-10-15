@@ -62,7 +62,9 @@ def _charter_lines(req: ConsultationRequest) -> list[str]:
     return lines
 
 
-def briefing(req: ConsultationRequest, catalog: str, today: date | None = None) -> str:
+def briefing(
+    req: ConsultationRequest, catalog: str, today: date | None = None, review: str | None = None
+) -> str:
     """What the agent knows when it starts. Artifacts are listed, not included: it reads them."""
     s = req.situation
     today = today or datetime.now(UTC).date()
@@ -98,6 +100,8 @@ def briefing(req: ConsultationRequest, catalog: str, today: date | None = None) 
     out += ["", f"# Decision to make: {req.kind}"]
     if s.failure is not None:
         out.append(f"The stage failed: {s.failure.code}: {s.failure.message}")
+    if review:
+        out.append(review)
     if req.gate is not None:
         g = req.gate
         out.append(f"Gate {g.gate_id} ({g.kind}) at step {g.step_key}: {g.prompt}")
@@ -126,7 +130,12 @@ def briefing(req: ConsultationRequest, catalog: str, today: date | None = None) 
 async def deliberate(
     req: ConsultationRequest, session: Session, *, lead: ChatLLM, critic: ChatLLM
 ) -> ConsultationResult:
-    start = briefing(req, session.ws.catalog())
+    review = (
+        await session.ws.review_status(req.situation.stage_key)
+        if req.kind in ("gate_review", "stage_outcome")
+        else None
+    )
+    start = briefing(req, session.ws.catalog(), review=review)
 
     async def run_critic(proposal: dict[str, Any], questions: str) -> dict[str, Any]:
         outcome = Outcome()

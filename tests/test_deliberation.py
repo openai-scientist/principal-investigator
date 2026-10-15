@@ -405,3 +405,26 @@ def test_briefing_states_today():
 
     req, _ = _hypothesis_request()
     assert "Today is 2026-10-15 (UTC)" in briefing(req, "(no artifacts)", date(2026, 10, 15))
+
+
+async def test_the_current_attempts_review_wins_over_an_earlier_higher_version():
+    content = blob(HYPOTHESES)
+    old, new = blob(FINDINGS_BLOCKED), blob(ON_H1)
+    req = request(
+        artifacts=[
+            ref("a1", content, schema="i2h.hypotheses/v1", role="primary"),
+            ref("r0", old, schema="review.findings/v1", role="review")
+            | {"version": 4, "stage_run_id": "s1"},
+            ref("r1", new, schema="review.findings/v1", role="review") | {"stage_run_id": "s2"},
+        ]
+    )
+    ws = Workspace(
+        req.artifacts,
+        KEY,
+        current_stage_run="s2",
+        transport=FakePlatform({"a1": content, "r0": old, "r1": new}).transport,
+    )
+    assert await ws.blocked("hypothesis") == (False, {"H1"})
+    status = await ws.review_status("hypothesis")
+    assert status.startswith("Latest independent review: blocking findings on H1; without one:")
+    assert "H1," not in status.split("without one:")[1]

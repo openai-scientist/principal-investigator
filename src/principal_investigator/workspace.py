@@ -136,6 +136,26 @@ class Workspace:
                 whole = True
         return whole, ids
 
+    async def review_status(self, stage_key: str | None) -> str | None:
+        """One line on what the latest review blocks, for the briefing; None without a review."""
+        blocked = await self.blocked(stage_key)
+        if blocked is None:
+            return None
+        whole, ids = blocked
+        if whole:
+            return "Latest independent review: a blocking finding on the whole artifact."
+        known: list[str] = []
+        for ref in self.refs.values():
+            if ref.role == "primary" and ref.stage_key in (None, stage_key):
+                known += await self.ids_of(ref.artifact_id)
+        if not ids:
+            return "Latest independent review: no blocking finding."
+        clean = [i for i in known if i not in ids]
+        return (
+            f"Latest independent review: blocking findings on {', '.join(sorted(ids))}; "
+            f"without one: {', '.join(clean) or 'none'}."
+        )
+
     async def _latest_review(self, stage_key: str | None):
         reviews = [
             r
@@ -144,6 +164,9 @@ class Workspace:
             and r.schema_id.startswith("review.findings/")
             and (stage_key is None or r.stage_key in (None, stage_key))
         ]
+        # Versions restart with each attempt: an earlier attempt's v4 is older than this one's v2.
+        current = [r for r in reviews if r.stage_run_id == self.current_stage_run]
+        reviews = current or reviews
         if not reviews:
             return None
         latest = max(reviews, key=lambda r: r.version)
