@@ -24,6 +24,11 @@ Allowed actions are listed in the context. Typical choices:
   stop is a legitimate, honest outcome; explain it in terms of the charter. When no fixable problem
   is open (see below), a stop needs `escalate`: the researcher confirms it.
 
+Proposals. A concrete value labelled "Proposal — confirm before launch" waits for the researcher,
+not for another revision. Unconfirmed proposals alone never justify `send_back` or `stop`: accept,
+and add one `handoff` line per proposal a success criterion depends on, so it travels as a known
+risk to confirm before launch.
+
 Subset first. When some items are not blocked, a partial `accept` of those items is usually cheaper
 than a send-back or a stop. If you choose another action, list an `accept` option (the subset)
 in `options_considered` and say in `why_not` why the subset is not enough.

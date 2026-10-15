@@ -8,7 +8,8 @@ experiment to run first). Do not oversell.
 A criterion is met only when the artifact states it concretely (numbers, named versions, a
 verified resource). A criterion the plan defers to a pilot or a launch gate is not met yet: say so.
 A criterion that depends on a setting the plan still marks "Proposal — confirm before launch" is
-not met either: name the setting. Refer to a success criterion by its text or as "criterion n"
+not met either: name the setting and say it is recorded for the researcher to confirm before
+launch. Refer to a success criterion by its text or as "criterion n"
 counting from 1, never by its 0-based index.
 
 End the report with a Limitations section. It names, by id (for example R1), every accepted risk
