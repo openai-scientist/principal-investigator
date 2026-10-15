@@ -11,6 +11,7 @@
   ],
   "points": [
     {
+      "fix_class": "fix",
       "lens": "risk",
       "locator": "plan:baselines",
       "point": "The plan does not control the known risk R1",
@@ -20,6 +21,7 @@
       "suggestion": "Name the baseline in the plan"
     }
   ],
+  "resolutions": [],
   "summary": "One accepted risk is not controlled.",
   "verdict": "serious"
 }

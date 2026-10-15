@@ -1,4 +1,5 @@
 {
+  "fix_class": "fix",
   "lens": "risk",
   "locator": "plan:baselines",
   "point": "The plan does not control the known risk R1",
