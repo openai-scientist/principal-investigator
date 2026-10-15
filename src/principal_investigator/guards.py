@@ -240,6 +240,14 @@ async def _comment(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace)
             )
     reviewer = {f["finding_id"]: f for f in await ws.review_findings(req.situation.stage_key)}
     adopt = list(dict.fromkeys(str(i) for i in adopt))
+    if adopt and not any(f.get("severity") == "blocking" for f in reviewer.values()):
+        # Live run: after a passed review the PI asked for sample sizes and leakage screens,
+        # which is the next stage's design work. Approve and carry them in the hand-off.
+        raise GuardError(
+            "the review has no blocking finding: approve, and carry the major and minor "
+            "findings to the next stage in your stage-outcome handoff; comment now only with "
+            "a finding of your own that cites the charter"
+        )
     if unknown := [i for i in adopt if i not in reviewer]:
         raise GuardError(f"unknown reviewer finding ids {unknown}; choose from {sorted(reviewer)}")
     taken = {str((reviewer[i].get("anchor") or {}).get("locator") or "") for i in adopt}

@@ -13,6 +13,8 @@ Approve when the artifact is good enough for its purpose; perfect is not the bar
 finding on one hypothesis blocks only that hypothesis: you may approve when others are sound. A
 blocking finding on the whole artifact means adopt it or escalate. Revisions have diminishing
 returns: when the same issues come back, approve what is sound.
+When the review has no blocking finding, approve: its major and minor findings become the next
+stage's input through your stage-outcome hand-off, not another revision here.
 
 Decision format (the `decision` argument of `decide`), approve:
 {"action": "approve", "note": "<one sentence>"}

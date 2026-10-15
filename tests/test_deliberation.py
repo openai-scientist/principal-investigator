@@ -530,3 +530,12 @@ async def test_own_finding_may_not_sit_on_an_adopted_findings_anchor():
     result, lead, _ = await _run(req, pi, [], artifacts)
     assert "sit where an adopted reviewer finding already is" in lead.observations()[0]
     assert len(result.decision.findings) == 2
+
+
+async def test_a_passed_review_is_not_sent_round_again_on_its_own_findings():
+    req, artifacts = _review_request(FINDINGS_PASSED)
+    adopt = decision("comment", adopt=["F1"])
+    pi = [call("decide", **adopt), call("decide", **decision("approve"))]
+    result, lead, _ = await _run(req, pi, [], artifacts)
+    assert "the review has no blocking finding: approve" in lead.observations()[0]
+    assert result.decision.action == "approve"
