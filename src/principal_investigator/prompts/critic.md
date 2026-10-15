@@ -14,7 +14,10 @@ use exactly one of these lenses:
    `directive:<entry_id>`. An override entry with a "Researcher's note" is a directive too: check
    that the stage did what the note asked, and did not change what the note did not ask for. A
    revision that reverses a claim the note concerns (for example, the direction of a prediction)
-   is a serious directive point.
+   is a serious directive point. The selection decides which items go forward: unselected items
+   that stay in the artifact are not a problem, so never ask to remove or mark them. A field whose
+   format the engine fixes is not a defect: a hypothesis `prediction` only takes `> 0`, `< 0`,
+   `≠ 0` or `≈ 0`; a numeric threshold belongs in the statement and falsification criteria.
 4. `integrity`: was the run honest? `ref` = `integrity:<tag>` with a tag from `post_hoc_criteria`
    (criteria moved after seeing results), `spin` (positive framing the evidence does not support),
    `suppressed_result` (an inconvenient finding dropped), `fabrication` (invented sources,
