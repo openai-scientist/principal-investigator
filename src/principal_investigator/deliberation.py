@@ -11,7 +11,7 @@ from principal_investigator.contract import (
     Obligation,
 )
 from principal_investigator.critic import run_critic
-from principal_investigator.guards import Draft, selectable
+from principal_investigator.guards import Draft, directive_entries, selectable
 from principal_investigator.llm import ChatLLM, LLMError
 from principal_investigator.tools import Session, pi_tools
 from principal_investigator.workspace import ArtifactError
@@ -114,8 +114,7 @@ def briefing(
     if req.obligations:
         out.append("Accepted risks (obligations):")
         out += [_obligation_line(o) for o in req.obligations]
-    directives = [e for e in req.notebook if e.kind == "directive" and e.actor == "user"]
-    if directives := [e for e in directives if e.entry_id]:
+    if directives := directive_entries(req):
         out.append(
             "Researcher directives (use `directive:<entry_id>` as a ref):"
             if req.kind == "stage_review"

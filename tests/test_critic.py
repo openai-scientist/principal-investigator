@@ -278,6 +278,25 @@ async def test_a_directive_ref_must_be_a_user_directive():
     assert result.report.points[0].ref == "directive:12"
 
 
+async def test_a_researcher_note_on_an_override_is_a_directive_the_critic_can_cite():
+    # Live: the note "Make H1's prediction a number" was followed by a reversed H1 nobody caught.
+    note = DIRECTIVE | {
+        "entry_id": "30",
+        "kind": "override",
+        "text": "The researcher overrode the PI at stage_review: sent the stage back to "
+        "hypothesis. Researcher's note: Make H1's prediction a number.",
+    }
+    plain = DIRECTIVE | {"entry_id": "31", "kind": "override", "text": "Overrode the PI."}
+    req, artifacts = _stage_review(notebook=[note, plain])
+    point = SERIOUS | {"lens": "directive", "ref": "directive:30"}
+    bad = SERIOUS | {"lens": "directive", "ref": "directive:31"}
+    replies = [call("report", **report(points=[bad])), call("report", **report(points=[point]))]
+    result, critic, _ = await _review(req, replies, artifacts)
+    assert "not a researcher directive" in critic.observations()[0]
+    assert result.report.points[0].ref == "directive:30"
+    assert "entry 30: The researcher overrode" in critic.calls[0][1]["content"]
+
+
 async def test_the_critic_step_limit_fails_the_consultation():
     req, artifacts = _stage_review()
     with pytest.raises(DeliberationError) as error:

@@ -245,12 +245,23 @@ async def _check_actionable(
     )
 
 
-def _directives(req: ConsultationRequest) -> list[str]:
+RESEARCHER_NOTE = "Researcher's note:"
+
+
+def directive_entries(req: ConsultationRequest) -> list:
+    """Researcher directives, and overrides that carry the researcher's note (a send-back's
+    request is an instruction the next stage must follow)."""
     return [
-        e.entry_id
+        e
         for e in req.notebook
-        if e.kind == "directive" and e.actor == "user" and e.entry_id
+        if e.actor == "user"
+        and e.entry_id
+        and (e.kind == "directive" or (e.kind == "override" and RESEARCHER_NOTE in e.text))
     ]
+
+
+def _directives(req: ConsultationRequest) -> list[str]:
+    return [e.entry_id for e in directive_entries(req)]
 
 
 def _check_directives(req: ConsultationRequest, given: list[DirectiveApplied]) -> None:

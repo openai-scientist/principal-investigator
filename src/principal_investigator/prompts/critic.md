@@ -11,7 +11,10 @@ use exactly one of these lenses:
 2. `risk`: for every accepted risk (obligation) in the briefing, did this stage control it? Cite
    `risk:<obligation_id>` when the way it was handled is a problem.
 3. `directive`: did the work respect the researcher's directives in the notebook? Cite
-   `directive:<entry_id>`.
+   `directive:<entry_id>`. An override entry with a "Researcher's note" is a directive too: check
+   that the stage did what the note asked, and did not change what the note did not ask for. A
+   revision that reverses a claim the note concerns (for example, the direction of a prediction)
+   is a serious directive point.
 4. `integrity`: was the run honest? `ref` = `integrity:<tag>` with a tag from `post_hoc_criteria`
    (criteria moved after seeing results), `spin` (positive framing the evidence does not support),
    `suppressed_result` (an inconvenient finding dropped), `fabrication` (invented sources,
