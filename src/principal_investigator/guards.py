@@ -237,7 +237,7 @@ async def _check_actionable(
     except ArtifactError:
         return  # nothing can be verified; the agent already saw the read error
     # An engine finding without a kind is a fix (older engines).
-    if any(f.get("severity") == "blocking" and f.get("kind", "fix") == "fix" for f in findings):
+    if any(f.get("severity") == "blocking" and (f.get("kind") or "fix") == "fix" for f in findings):
         return
     raise GuardError(
         "the open problems cannot be fixed by revising this stage; accept (a subset if needed) "
@@ -472,12 +472,8 @@ async def check_report(
             )
         )
 
-    expected = _verdict([*points, *added])
-    if raw.get("verdict") != expected:
-        raise GuardError(
-            f"verdict must be {expected!r} for these points (serious iff any serious point or "
-            "maintained resolution; concerns iff only minor points; sound iff none)"
-        )
+    # The verdict may be judged before or after the downgrade below; both are consistent.
+    before = _verdict([*points, *added])
     if req.prior_critique is not None:
         # A repeat review keeps new serious points only for integrity and directive.
         for p in points:
@@ -488,6 +484,12 @@ async def check_report(
             ):
                 p.severity = "minor"
                 p.point = f"{NEW_IN_REPEAT}{p.point}"
+    expected = _verdict([*points, *added])
+    if raw.get("verdict") not in (before, expected):
+        raise GuardError(
+            f"verdict must be {expected!r} for these points (serious iff any serious point or "
+            "maintained resolution; concerns iff only minor points; sound iff none)"
+        )
     final = [*points, *added]
     return CriticReport(
         verdict=_verdict(final),

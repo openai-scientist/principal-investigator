@@ -152,7 +152,7 @@ class Workspace:
                 ids.setdefault(hypothesis, set())
                 if finding.get("finding_id"):
                     ids[hypothesis].add(str(finding["finding_id"]))
-            elif finding.get("kind", "fix") == "fix":  # an older engine sends no kind
+            elif (finding.get("kind") or "fix") == "fix":  # an older engine sends no kind
                 whole = True
         return whole, ids
 
@@ -178,7 +178,7 @@ class Workspace:
                 str(f["finding_id"])
                 for f in await self.review_findings(stage_key)
                 if f.get("severity") == "blocking"
-                and f.get("kind", "fix") != "fix"
+                and (f.get("kind") or "fix") != "fix"
                 and not str((f.get("anchor") or {}).get("locator") or "").startswith("hypothesis:")
             ]
         except ArtifactError:

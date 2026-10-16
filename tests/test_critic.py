@@ -414,11 +414,12 @@ async def test_a_new_charter_point_in_a_repeat_review_is_minor_but_integrity_sta
     assert second.severity == "serious" and result.report.verdict == "serious"
 
 
-async def test_a_new_risk_point_is_downgraded_and_the_verdict_is_recomputed():
+@pytest.mark.parametrize("verdict", ["serious", "concerns"])
+async def test_a_new_risk_point_is_downgraded_and_the_verdict_is_recomputed(verdict):
     obligations = [OBLIGATIONS[0]]
     req, artifacts = _stage_review(prior_critique=PRIOR, obligations=obligations)
     new_risk = SERIOUS | {"lens": "risk", "ref": "risk:R1", "point": "R1 not handled."}
-    bad = _repeat_report("serious", [new_risk], BOTH_RESOLVED)
+    bad = _repeat_report(verdict, [new_risk], BOTH_RESOLVED)
     bad["obligations"] = [CHECKS[0]]
     result, _, _ = await _review(req, [call("report", **bad)], artifacts)
     assert result.report.verdict == "concerns"

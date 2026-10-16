@@ -359,8 +359,9 @@ async def test_an_integrity_point_that_needs_evidence_does_not_justify_a_send_ba
     assert NOT_FIXABLE in lead.observations()[0]
 
 
-async def test_a_blocking_review_finding_of_kind_fix_makes_the_stage_fixable():
-    findings = ON_H1 | {"findings": [ON_H1["findings"][0] | {"kind": "fix"}]}
+@pytest.mark.parametrize("kind", ["fix", None])
+async def test_a_blocking_review_finding_of_kind_fix_makes_the_stage_fixable(kind):
+    findings = ON_H1 | {"findings": [ON_H1["findings"][0] | {"kind": kind}]}
     req, artifacts = _blocked_request(findings)
     argued = SEND_BACK | {
         "options_considered": [{"action": "accept", "summary": "H2", "why_not": "Too thin"}]
