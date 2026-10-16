@@ -1,6 +1,8 @@
 """The tools of the PI and of its Critic."""
 
+import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,6 +17,10 @@ from principal_investigator.workspace import ArtifactError, Workspace
 OPENALEX = "https://api.openalex.org/works"
 HF_DATASETS = "https://huggingface.co/api/datasets"
 NOTE_KINDS = ["lesson", "risk", "observation", "question"]
+#: Words a model adds to a dataset query that make the Hub's name search match nothing.
+_QUERY_NOISE = re.compile(r"\b(hugging\s*face|hf|hub|datasets?|benchmarks?)\b", re.IGNORECASE)
+#: Seconds before the one retry of a lookup that hit a rate limit or a transient failure.
+RETRY_DELAY = 2.0
 
 
 @dataclass
@@ -28,6 +34,7 @@ class Session:
     notes: list[NoteDraft] = field(default_factory=list)
     transport: httpx.AsyncBaseTransport | None = None
     contact_email: str | None = None
+    openalex_api_key: str | None = None
 
 
 def _object(value: Any) -> Any:
@@ -89,6 +96,8 @@ def read_tools(s: Session) -> list[Tool]:
         }
         if s.contact_email:
             params["mailto"] = s.contact_email
+        if s.openalex_api_key:
+            params["api_key"] = s.openalex_api_key
         data = await _get_json(s, OPENALEX, params)
         rows = []
         for w in data.get("results", []):
@@ -100,10 +109,11 @@ def read_tools(s: Session) -> list[Tool]:
         return "\n".join(rows) or f"No works found for {query!r}."
 
     async def check_dataset(args: dict) -> str:
-        query = str(args.get("query") or "").strip()
+        query = " ".join(_QUERY_NOISE.sub(" ", str(args.get("query") or "")).split())
         if not query:
-            raise ToolError("query is required")
-        data = await _get_json(s, HF_DATASETS, {"search": query, "limit": 8, "full": "true"})
+            raise ToolError("query is required: the dataset's name, e.g. 'cifar10'")
+        params = {"search": query, "limit": 8, "full": "true", "sort": "downloads", "direction": -1}
+        data = await _get_json(s, HF_DATASETS, params)
         rows = []
         for d in data if isinstance(data, list) else []:
             tags = d.get("tags") or []
@@ -112,7 +122,16 @@ def read_tools(s: Session) -> list[Tool]:
                 f"- {d.get('id')}: downloads={d.get('downloads')}, likes={d.get('likes')}, "
                 f"license={license_}, gated={d.get('gated')}, private={d.get('private')}"
             )
-        return "\n".join(rows) or f"No HuggingFace dataset matches {query!r}."
+        if not rows:
+            return (
+                f"No HuggingFace dataset matches {query!r}. The Hub searches dataset ids; try a "
+                "shorter name. Absence here does not show that the dataset is unavailable: "
+                "many originals live on Zenodo, GitHub or a project page."
+            )
+        return "\n".join(rows) + (
+            "\nMost downloaded first. A community mirror may carry another license than the "
+            "original; license=? means the card declares none."
+        )
 
     return [
         Tool(
@@ -161,7 +180,7 @@ def read_tools(s: Session) -> list[Tool]:
         Tool(
             "check_dataset",
             "Check on the HuggingFace Hub that a dataset exists and is usable: id, downloads, "
-            "license, gated.",
+            "license, gated. `query` is the dataset's name only (e.g. 'cifar10', 'defects4j').",
             _schema({"query": {"type": "string"}}, ["query"]),
             check_dataset,
             lambda a, o: f"checked datasets for {a.get('query')!r}",
@@ -170,11 +189,20 @@ def read_tools(s: Session) -> list[Tool]:
 
 
 async def _get_json(s: Session, url: str, params: dict[str, Any]) -> Any:
-    try:
-        async with httpx.AsyncClient(timeout=20, transport=s.transport) as client:
-            response = await client.get(url, params=params)
-    except httpx.HTTPError as exc:
-        raise ToolError(f"{url} unreachable ({type(exc).__name__})") from exc
+    """GET a public API; a rate limit or a transient failure is retried once."""
+    for attempt in (1, 2):
+        try:
+            async with httpx.AsyncClient(timeout=20, transport=s.transport) as client:
+                response = await client.get(url, params=params)
+        except httpx.HTTPError as exc:
+            if attempt == 1:
+                await asyncio.sleep(RETRY_DELAY)
+                continue
+            raise ToolError(f"{url} unreachable ({type(exc).__name__})") from exc
+        if attempt == 1 and (response.status_code == 429 or response.status_code >= 500):
+            await asyncio.sleep(RETRY_DELAY)
+            continue
+        break
     if response.status_code != 200:
         raise ToolError(f"{url} answered HTTP {response.status_code}")
     try:

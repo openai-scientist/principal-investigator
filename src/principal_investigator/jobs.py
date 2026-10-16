@@ -75,6 +75,7 @@ class Jobs:
             meter=meter,
             transport=self.web_transport,
             contact_email=self.settings.contact_email,
+            openalex_api_key=self.settings.openalex_api_key,
         )
         try:
             timeout = self.settings.llm_timeout_seconds
