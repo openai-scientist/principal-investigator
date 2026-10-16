@@ -33,7 +33,9 @@ launch" waits for the researcher, not for another revision. Such proposals alone
 on, so it travels as a known risk to confirm before launch. A rule that decides how results are
 analysed or read (a threshold, a gate between confirmatory and descriptive analysis, a test or
 interval method, an analysis seed) is different: the plan must fix it, so one left as a proposal
-or vague is a fixable defect of the plan.
+or vague is a fixable defect of the plan. The exception: a labelled proposal to change a decision
+rule the hypotheses state (for example a multiplicity correction), with the stated rule kept, waits
+for the researcher like an implementation proposal.
 
 Subset first. When some items are not blocked, a partial `accept` of those items is usually cheaper
 than a send-back or a stop. If you choose another action, list an `accept` option (the subset)

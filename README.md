@@ -44,7 +44,8 @@ PI_SERVICE_KEY=<32+ characters> PI_STORE_DIR=runs uv run pi-api   # 127.0.0.1:80
 
 Environment: `PI_SERVICE_KEY` (required, shared with the Platform's `PI_SERVICE`),
 `PI_STORE_DIR` (default `runs`), `PI_HOST`, `PI_PORT` (default 8003), `PI_LLM_TIMEOUT_SECONDS`,
-`PI_CONTACT_EMAIL` (optional; sent to OpenAlex as `mailto` for its polite pool).
+`PI_CONTACT_EMAIL` (optional; sent to OpenAlex as `mailto` for its polite pool),
+`PI_OPENALEX_API_KEY` (optional; OpenAlex lookups then draw on the key's own quota).
 
 ## Test
 

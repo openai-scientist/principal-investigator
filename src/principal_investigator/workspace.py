@@ -172,14 +172,28 @@ class Workspace:
             if whole:
                 return "Latest independent review: a blocking finding on the whole artifact."
             known = await self.current_ids(stage_key)
+            # A blocking finding on the whole artifact that revising cannot fix (an incomplete
+            # review, missing evidence) blocks nothing, but the briefing must not hide it.
+            open_ = [
+                str(f["finding_id"])
+                for f in await self.review_findings(stage_key)
+                if f.get("severity") == "blocking"
+                and f.get("kind", "fix") != "fix"
+                and not str((f.get("anchor") or {}).get("locator") or "").startswith("hypothesis:")
+            ]
         except ArtifactError:
             return None
+        tail = (
+            f" Open on the whole artifact, not fixable by revising: {', '.join(open_)}."
+            if open_
+            else ""
+        )
         if not ids:
-            return "Latest independent review: no blocking finding."
+            return "Latest independent review: no blocking finding." + tail
         clean = [i for i in known if i not in ids]
         return (
             f"Latest independent review: blocking findings on {', '.join(sorted(ids))}; "
-            f"without one: {', '.join(clean) or 'none'}."
+            f"without one: {', '.join(clean) or 'none'}." + tail
         )
 
     async def _latest_review(self, stage_key: str | None):

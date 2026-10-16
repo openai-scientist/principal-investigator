@@ -85,3 +85,14 @@ async def test_a_lasting_failure_is_reported_after_one_retry():
     with pytest.raises(ToolError, match="429"):
         await _tool("search_literature", handler)({"query": "q"})
     assert len(calls) == 2
+
+
+async def test_an_exact_hub_id_is_searched_as_given():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.params["search"])
+        return httpx.Response(200, json=[])
+
+    await _tool("check_dataset", handler)({"query": "hf-internal-testing/fixtures-datasets"})
+    assert seen == ["hf-internal-testing/fixtures-datasets"]

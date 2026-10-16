@@ -109,7 +109,9 @@ def read_tools(s: Session) -> list[Tool]:
         return "\n".join(rows) or f"No works found for {query!r}."
 
     async def check_dataset(args: dict) -> str:
-        query = " ".join(_QUERY_NOISE.sub(" ", str(args.get("query") or "")).split())
+        query = str(args.get("query") or "").strip()
+        if "/" not in query:  # an owner/name id is exact; only a free name gets cleaned
+            query = " ".join(_QUERY_NOISE.sub(" ", query).split())
         if not query:
             raise ToolError("query is required: the dataset's name, e.g. 'cifar10'")
         params = {"search": query, "limit": 8, "full": "true", "sort": "downloads", "direction": -1}

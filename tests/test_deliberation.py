@@ -671,3 +671,26 @@ async def test_briefing_survives_an_unreadable_review():
     )
     ws = Workspace(req.artifacts, KEY, transport=FakePlatform({"a1": content}).transport)
     assert await ws.review_status("hypothesis") is None
+
+
+async def test_the_briefing_names_an_incomplete_review_instead_of_calling_it_clean():
+    # An engine whose reviewer failed sends one blocking needs_evidence finding on the whole
+    # document; it blocks no hypothesis, but "no blocking finding" would hide it.
+    incomplete = FINDINGS_BLOCKED | {
+        "findings": [
+            FINDINGS_BLOCKED["findings"][0]
+            | {
+                "finding_id": "F1-3",
+                "anchor": {"locator": "document:hypotheses"},
+                "kind": "needs_evidence",
+            }
+        ]
+    }
+    req, artifacts = _blocked_request(incomplete)
+    ws = Workspace(req.artifacts, KEY, transport=FakePlatform(artifacts).transport)
+    assert await ws.blocked("hypothesis") == (False, set())
+    status = await ws.review_status("hypothesis")
+    assert status == (
+        "Latest independent review: no blocking finding. "
+        "Open on the whole artifact, not fixable by revising: F1-3."
+    )

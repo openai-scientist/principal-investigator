@@ -51,7 +51,12 @@ Give every point a `fix_class`, which says who can resolve it:
   vague value (no concrete proposal) is `fix`. This holds for implementation and environment
   details. A rule that decides how results are analysed or read (a threshold, a gate between
   confirmatory and descriptive analysis, a test or interval method, an analysis seed) must be
-  fixed in the plan with a concrete value; left as a proposal or vague, it is `fix`.
+  fixed in the plan with a concrete value; left as a proposal or vague, it is `fix`. The
+  exception: a labelled proposal to change a decision rule the hypotheses state (for example a
+  multiplicity correction), with the stated rule kept, is the researcher's call: `later`, `minor`.
+- A stage works only on the items selected for it and never adds one. A shortfall against the
+  charter in the selected items (for example one hypothesis where two are required) is
+  `needs_evidence`: the PI or the researcher decides it, revising this stage cannot.
 
 Finish by calling `report` with `verdict`, `summary` (one or two sentences), `points` (at most 8;
 each has severity, lens, ref, point, fix_class, and optionally locator and suggestion) and `obligations` (and `resolutions` in a repeat review).
