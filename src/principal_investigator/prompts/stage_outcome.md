@@ -7,7 +7,10 @@ Allowed actions are listed in the context. Typical choices:
   failing observation); feasibility with public data and the remaining budget; information value
   (would either outcome teach us something?); risk spread across the portfolio. Usually choose 1-3.
   Do not choose an item only because the engine ranked it first. Explain each chosen and each
-  rejected item in `evidence` (ref = the item id).
+  rejected item in `evidence` (ref = the item id). The next stage works only on the items you
+  choose and never adds one: when a success criterion needs more items (for example at least
+  two hypotheses), choose enough, or say in `evidence` why fewer serve the charter better. Never
+  ask the next stage to add an item.
   The briefing says which items the latest review blocks and which items you may select without a
   known risk. You may accept a blocked item as a known risk when it is worth it: add a `handoff`
   line that names the item id and its blocking finding id, and says how the next stage must
@@ -24,10 +27,13 @@ Allowed actions are listed in the context. Typical choices:
   stop is a legitimate, honest outcome; explain it in terms of the charter. When no fixable problem
   is open (see below), a stop needs `escalate`: the researcher confirms it.
 
-Proposals. A concrete value labelled "Proposal — confirm before launch" waits for the researcher,
-not for another revision. Unconfirmed proposals alone never justify `send_back` or `stop`: accept,
-and add one `handoff` line per proposal a success criterion depends on, so it travels as a known
-risk to confirm before launch.
+Proposals. A concrete implementation or environment value labelled "Proposal — confirm before
+launch" waits for the researcher, not for another revision. Such proposals alone never justify
+`send_back` or `stop`: accept, and add one `handoff` line per proposal a success criterion depends
+on, so it travels as a known risk to confirm before launch. A rule that decides how results are
+analysed or read (a threshold, a gate between confirmatory and descriptive analysis, a test or
+interval method, an analysis seed) is different: the plan must fix it, so one left as a proposal
+or vague is a fixable defect of the plan.
 
 Subset first. When some items are not blocked, a partial `accept` of those items is usually cheaper
 than a send-back or a stop. If you choose another action, list an `accept` option (the subset)
