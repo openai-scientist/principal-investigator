@@ -163,7 +163,7 @@ async def check(raw: dict[str, Any], req: ConsultationRequest, ws: Workspace) ->
     )
     options = _models(raw.get("options_considered"), ConsideredOption, 6)
     critic_response = _models(raw.get("critic_response"), CriticResponse, 20)
-    directives_applied = _models(raw.get("directives_applied"), DirectiveApplied, 20)
+    directives_applied = _models(raw.get("directives_applied"), DirectiveApplied, 60)
 
     _check_critic_response(req, critic_response)
     if escalate is None:
@@ -246,17 +246,34 @@ async def _check_actionable(
 
 
 RESEARCHER_NOTE = "Researcher's note:"
+# Management writes "...: sent the stage back to <stage_key>." on a send-back override.
+_SENT_BACK = re.compile(r"sent the stage back to ([\w-]+)")
+
+
+def _note_target(entry) -> str | None:
+    match = _SENT_BACK.search(entry.text)
+    return match.group(1) if match else entry.stage_key
 
 
 def directive_entries(req: ConsultationRequest) -> list:
-    """Researcher directives, and overrides that carry the researcher's note (a send-back's
-    request is an instruction the next stage must follow)."""
+    """Researcher directives (the whole run), and overrides that carry the researcher's note.
+
+    A send-back note instructs the stage it sent back to, so it applies only to consultations
+    on that stage (live risk: a hypothesis note was checked against the experiment plan).
+    """
     return [
         e
         for e in req.notebook
         if e.actor == "user"
         and e.entry_id
-        and (e.kind == "directive" or (e.kind == "override" and RESEARCHER_NOTE in e.text))
+        and (
+            e.kind == "directive"
+            or (
+                e.kind == "override"
+                and RESEARCHER_NOTE in e.text
+                and _note_target(e) == req.situation.stage_key
+            )
+        )
     ]
 
 

@@ -297,6 +297,25 @@ async def test_a_researcher_note_on_an_override_is_a_directive_the_critic_can_ci
     assert "entry 30: The researcher overrode" in critic.calls[0][1]["content"]
 
 
+@pytest.mark.parametrize(
+    ("text", "stage_key", "applies"),
+    [
+        ("sent the stage back to hypothesis. Researcher's note: X.", "hypothesis", True),
+        ("sent the stage back to hypothesis. Researcher's note: X.", "experiment_plan", False),
+        ("sent the stage back to experiment_plan. Researcher's note: X.", "experiment_plan", True),
+    ],
+)
+def test_a_send_back_note_applies_only_to_the_stage_it_sent_back_to(text, stage_key, applies):
+    from principal_investigator.guards import directive_entries
+
+    note = DIRECTIVE | {"entry_id": "30", "kind": "override", "text": text}
+    req, _ = _stage_review(notebook=[DIRECTIVE, note])
+    req.situation.stage_key = stage_key
+    ids = [e.entry_id for e in directive_entries(req)]
+    # A plain directive holds for the whole run.
+    assert ids == ([DIRECTIVE["entry_id"], "30"] if applies else [DIRECTIVE["entry_id"]])
+
+
 async def test_the_critic_step_limit_fails_the_consultation():
     req, artifacts = _stage_review()
     with pytest.raises(DeliberationError) as error:
