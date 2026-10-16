@@ -48,7 +48,10 @@ Give every point a `fix_class`, which says who can resolve it:
 - `later`: the next stage owns it. Example: seeds or hyperparameters that are frozen at
   preregistration or execution. A concrete value the plan labels "Proposal — confirm before
   launch" is confirmed by the researcher at launch: it is `later` and `minor`. Only a missing or
-  vague value (no concrete proposal) is `fix`.
+  vague value (no concrete proposal) is `fix`. This holds for implementation and environment
+  details. A rule that decides how results are analysed or read (a threshold, a gate between
+  confirmatory and descriptive analysis, a test or interval method, an analysis seed) must be
+  fixed in the plan with a concrete value; left as a proposal or vague, it is `fix`.
 
 Finish by calling `report` with `verdict`, `summary` (one or two sentences), `points` (at most 8;
 each has severity, lens, ref, point, fix_class, and optionally locator and suggestion) and `obligations` (and `resolutions` in a repeat review).
